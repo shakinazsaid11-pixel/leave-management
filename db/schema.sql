@@ -1,4 +1,3 @@
----Ext
 ----to prevent overlap----
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
@@ -31,16 +30,15 @@ CREATE TABLE leave_request (
     status              VARCHAR(10) NOT NULL DEFAULT 'PENDING'
                          CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'CANCELLED')),
     reviewer_id         INT REFERENCES employee(employee_id),
-    reviewed_at         TIMESTAMPTZ,
+    reviewed_at         TIMESTAMP,
     rejection_reason   VARCHAR(255),
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-	-------CHECK (start_date >= CURRENT_DATE),
+    created_at          TIMESTAMP NOT NULL DEFAULT now(),
+	CHECK (start_date >= CURRENT_DATE),
 	CHECK (end_date >= start_date),
-	CHECK (
-    (status IN ('APPROVED', 'REJECTED') AND reviewer_id IS NOT NULL AND reviewed_at IS NOT NULL)
-    OR (status = 'PENDING' AND reviewer_id IS NULL AND reviewed_at IS NULL)
-    OR (status = 'CANCELLED')
-),
+	 CHECK (
+        (status IN ('APPROVED', 'REJECTED') AND reviewer_id IS NOT NULL AND reviewed_at IS NOT NULL)
+        OR (status IN ('PENDING', 'CANCELLED') AND reviewer_id IS NULL AND reviewed_at IS NULL)
+    ),
  
     -- A rejection must always come with a reason; nothing else should have one.
     CHECK (

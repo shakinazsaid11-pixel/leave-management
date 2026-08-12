@@ -1,17 +1,13 @@
 services:
   postgres:
+    image: postgres:18
     container_name: leave-management-db
-
     environment:
       POSTGRES_DB: postgres
-      POSTGRES_PASSWORD: postgres
       POSTGRES_USER: postgres
-
-    image: postgres:18
-
+      POSTGRES_PASSWORD: postgres
     ports:
       - "5433:5432"
-
     volumes:
       - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
       - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
