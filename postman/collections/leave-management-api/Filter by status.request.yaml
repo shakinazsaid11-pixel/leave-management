@@ -1,0 +1,7 @@
+$kind: http-request
+description: ""
+url: http://localhost:3000/leave-requests?status=PENDING
+method: GET
+queryParams:
+  status: PENDING
+order: 4480737504796011

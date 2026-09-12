@@ -17,18 +17,43 @@
 
 ### What confused me, and what I decided
 
-**Where does the 21 days live?** I went back and forth between a stored running balance (a `used_days` counter on the employee, decremented on approval) and a fully calculated balance (sum approved requests on demand). I went with **calculated**, backed by a `leave_balance(employee_id, year)` table that only stores the *entitlement*, not the usage. Reasoning: a stored counter is a second copy of information that already exists in `leave_request` — it can drift out of sync with reality (an approval or cancellation that doesn't correctly adjust the counter), and I'd rather have one source of truth even at the cost of an aggregate query. The counter approach would be faster to read but is a correctness risk for exactly the rule the client cares about most.
+**Where does the 21 days live?** I went back and forth between a stored running balance (a `used_days` counter on the employee, decremented on approval) and a fully calculated balance (sum approved requests on demand). I went with **calculated**, backed by a `leave_balance(employee_id, year)` table that only stores the *entitlement*, not the usage. Reasoning: a stored counter is a second copy of information that already exists in `leave_request` — it can drift out of sync with reality, and I'd rather have one source of truth even at the cost of an aggregate query.
 
-Splitting it into a per-year table (rather than a bare constant) was really about the Dec 30 → Jan 3 question: I decided a request is charged against the year of its **start date**, in full — not split across two years. The brief explicitly says reporting and part-days are out of scope for now, so I didn't want to build a system that partially allocates a request across two balances when nobody asked for that level of precision yet. I'm flagging this as an assumption to confirm on the call, not a settled fact.
+Splitting it into a per-year table was really about the Dec 30 → Jan 3 question: I decided a request is charged against the year of its **start date**, in full. I'm flagging this as an assumption to confirm on the call, not a settled fact.
 
-**Do weekends affect the database design, or is that someone else's problem?** I decided it's partly the database's problem. If `business_days` weren't stored, "does this employee have enough days left" would require recomputing the weekend-exclusion logic every time balance is checked — meaning the *definition* of a weekend would need to live in one place and be called consistently by every query that touches balance. Storing the computed value at submission time sidesteps that: the business logic for *what counts as a business day* only needs to run once, at the point of creation, and everything downstream (balance checks, display) just reads a number. The trade-off I noted explicitly: if the weekend policy changes, already-approved requests keep their old business-day count. I think that's correct behavior (you don't want history rewriting itself), but it's worth saying out loud since it wasn't an obvious choice.
+**Do weekends affect the database design, or is that someone else's problem?** I decided it's partly the database's problem. Storing the computed `business_days` value at submission time means the definition of a weekend only needs to be applied once. Trade-off: if the weekend policy changes, already-approved requests keep their old count — I think that's correct, but it's worth saying out loud.
 
-**What stops the database from accepting `end_date < start_date` on its own?** A plain `CHECK (end_date >= start_date)` on the table. This one didn't confuse me, but it's a clean example of the difference between what a `CHECK` can do (a rule about a single row) versus what needs a trigger (a rule about a row compared against other rows, like the balance and overlap rules).
+**What stops the database from accepting `end_date < start_date` on its own?** A plain `CHECK (end_date >= start_date)`.
 
-**Reviewer for the one employee with no manager.** The brief doesn't say who approves the top-of-tree employee's own leave. I picked a pragmatic answer for the seed data (another manager reviews it) rather than leaving it unhandled, but this is a real gap in the business rules worth raising on the call — right now nothing in the schema stops a manager's own request from having no valid reviewer if there genuinely isn't anyone senior to them.
+**Reviewer for the one employee with no manager.** Still an open gap in the business rules — flagged for the call.
 
 ### Questions I'm bringing to the call
 
-- Confirm the "request charged to the year of its start_date" assumption for New Year's-spanning leave — is that actually what they want, or should it split?
+- Confirm the "request charged to the year of its start_date" assumption for New Year's-spanning leave.
 - Who reviews the request of an employee who has no manager?
-- Is a calculated balance (vs. a stored counter) the right trade-off once this scales past ~200 employees, or should I revisit that once there's a read-heavy dashboard?
+- Is a calculated balance the right trade-off once this scales past ~200 employees?
+
+---
+
+## Week 2 — the API
+
+Built the NestJS/TypeORM backend on top of the week-1 schema: all 8 endpoints (`GET /employees`, `GET /employees/:id`, `POST /leave-requests`, `GET /leave-requests` with filtering, `GET /leave-requests/:id`, and the three `PATCH .../approve|reject|cancel` transitions).
+
+### What I built
+
+- **`EmployeesModule`** — entity + service + controller. The remaining-balance calculation (entitlement minus approved days for the year) lives in the service, since it's a business rule that combines two tables, not a query.
+- **`LeaveRequestsModule`** — entity + service + controller for the full leave-request lifecycle. Business-day counting (excluding weekends) happens in `create()`, computed from `startDate`/`endDate` rather than trusted from the client — the client shouldn't be the one deciding how many days a request costs.
+- **Status-transition rules in the service**: only a `PENDING` request can move to `APPROVED`/`REJECTED`/`CANCELLED`; trying to act on a request that's already been decided returns a clear error instead of silently succeeding or throwing a raw DB error.
+- **A response interceptor** wraps every successful response as `{ "success": true, "data": ... }`.
+- **A Postman collection** (kept as local `.yaml` files via "Work locally with Git", not a single exported JSON) covering all 8 endpoints plus a few deliberately-broken cases: employee not found, leave request not found, filtering by employee and by status.
+
+### A real bug I hit, and what it taught me
+
+My first `POST /leave-requests` attempt failed with `Cannot read properties of undefined (reading 'employeeId')`, followed by a Postgres `null value in column "business_days"` error. The cause: I'd written `create()` to expect `businessDays` as part of the incoming request body, but the DTO never had that field — the client only ever sends `employeeId`/`startDate`/`endDate`. The fix was to compute `businessDays` inside the service from the two dates, which is also just the more correct design: that calculation is business logic, and the client asking for leave shouldn't need to know or care how the server counts business days.
+
+### Known gaps I'm not hiding from the call
+
+- **Response shape is inconsistent.** Success responses are wrapped (`{ success, data }`); errors still come back in NestJS's default shape. I ran out of time to write the matching exception filter before this log entry. This directly matters for one of the assignment's own questions ("what does the body say for a 404") — right now the honest answer is "it depends whether it succeeded or failed," which isn't the intent.
+- **No dedicated Repository class.** Services inject TypeORM's `Repository<T>` directly rather than going through a repository layer that's the only place allowed to build queries. `LeaveRequestsService.findAll` builds its own `createQueryBuilder` chain for the filters, which is arguably query-building logic that belongs one layer down.
+- **Past-start-date requests** currently surface as a raw Postgres constraint violation rather than a clean validation error — the same category of problem as the response-shape issue, just not yet caught before the database sees it.
+
