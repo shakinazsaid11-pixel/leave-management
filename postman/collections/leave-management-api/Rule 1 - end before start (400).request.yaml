@@ -1,0 +1,16 @@
+$kind: http-request
+description: ""
+url: http://localhost:3000/leave-requests
+method: POST
+body:
+  type: json
+  content: "{\r
+
+    \  \"employeeId\": 4,\r
+
+    \  \"startDate\": \"2026-10-10\",\r
+
+    \  \"endDate\": \"2026-10-05\"\r
+
+    }"
+order: 4501962001519700

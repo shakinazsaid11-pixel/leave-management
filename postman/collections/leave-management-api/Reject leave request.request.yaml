@@ -1,0 +1,14 @@
+$kind: http-request
+description: ""
+url: http://localhost:3000/leave-requests/8/reject
+method: PATCH
+body:
+  type: json
+  content: "   {\r
+
+    \     \"reviewerId\": 2,\r
+
+    \     \"reason\": \"Team is short-staffed that week\"\r
+
+    \   }"
+order: 4501552996763167

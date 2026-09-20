@@ -53,12 +53,10 @@ Go to the API directory:
 cd leave-api
 ```
 
-Copy `.env.example` to `.env` and set the required values:
+Copy `.env.example` to `.env` — the defaults already match `docker-compose.yml`:
 
-```text
-DB_PASSWORD=
-DB_DATABASE=
-PORT=
+```bash
+cp .env.example .env
 ```
 
 The `.env` file is local configuration and should not be committed to the repository.
@@ -91,7 +89,7 @@ To build the application:
 npm run build
 ```
 
-The API runs on the port configured in `.env`.
+The API runs on the port configured in `.env` (`http://localhost:3000` by default).
 
 ---
 
@@ -115,23 +113,21 @@ npm run test:e2e
 
 ## Database
 
-The project uses PostgreSQL.
-
-The database is started using Docker Compose:
+The project uses PostgreSQL 16, run through `docker-compose.yml`.
 
 ```bash
 docker compose up -d
 ```
 
-The database schema and seed data are loaded when the database is initialized.
+The database schema and seed data are loaded automatically on the **first** run only (Postgres runs anything in `/docker-entrypoint-initdb.d/` once, when the data volume is empty).
 
-To connect to PostgreSQL:
+To connect to PostgreSQL directly:
 
 ```bash
-docker exec -it leave_management_db psql -U leave_admin -d leave_management
+docker exec -it leave-management-db psql -U postgres -d postgres
 ```
 
-To completely reset the database:
+To completely reset the database (re-run schema + seed):
 
 ```bash
 docker compose down -v
@@ -140,7 +136,7 @@ docker compose up -d
 
 ---
 
-## Week 1 Database Design
+## Week 1 — Database Design
 
 The database contains:
 
@@ -152,56 +148,45 @@ The database contains:
 
 Important database design decisions:
 
-- Remaining leave balance is calculated from the source data.
+- Remaining leave balance is calculated from the source data, not stored as a running counter.
 - Friday and Saturday are excluded when calculating business days.
 - `start_date` and `end_date` use `DATE`.
 - Timestamp columns use `TIMESTAMPTZ`.
-- The rule that a leave request cannot start in the past is handled by the application layer rather than a database constraint.
-- Approved leave overlap is prevented at the database level.
-- Balance enforcement is handled by a database trigger.
+- The rule that a leave request cannot start in the past is enforced at the database level (a `CHECK` constraint) **and** re-checked in the application layer, so the caller gets a clear message instead of a raw database error.
+- Approved leave overlap is prevented at the database level (a `GIST EXCLUDE` constraint) **and** re-checked in the application layer for the same reason.
+- Balance enforcement is backed by a database trigger, with the same check duplicated in the service for a clean error message.
 - Cancelling an approved request keeps its review history.
-- Weekend-only leave requests should be rejected by the application layer.
 
 ---
 
-## Week 3 Validation
+## Week 3 — Validation
 
-Business validation is handled in the API service layer before database operations where possible.
+Every rule below is enforced in the **service layer**, before the database is ever asked. The database still holds its own constraints (from week 1) as a safety net, but the caller should almost always be stopped by the API first with a message they can actually understand.
 
-The API validates the following rules:
+| # | Rule | Status | Message |
+|---|---|---:|---|
+| 1 | End date is before start date | 400 | `End date cannot be before start date` |
+| 2 | Start date is in the past | 400 | `Start date cannot be in the past` |
+| 3 | Requested days exceed remaining balance | 400 | `You have X day(s) remaining and this request needs Y day(s)` |
+| 4 | Dates overlap an existing approved request | 409 | `This request overlaps an existing approved request (start to end)` |
+| 5 | Employee does not exist | 400 | `Employee X does not exist` |
+| 6 | Rejection submitted without a reason | 400 | `A rejection reason is required` |
+| 7 | Approved request cancelled by the employee (not their manager) | 403 | `An approved request can only be cancelled by the employee's manager` |
+| 8 | Request already approved/rejected/cancelled, approved again | 400 | `Leave request X is <status>, cannot approve` |
 
-| Rule | Status | Message |
-|---|---:|---|
-| End date is before start date | 400 | End date must be on or after start date. |
-| Start date is in the past | 400 | Start date cannot be in the past. |
-| Requested days exceed remaining balance | 400 | Requested leave days exceed the employee's remaining balance. |
-| Dates overlap an existing approved request | 400 | Leave dates overlap an existing approved leave request. |
-| Employee does not exist | 404 | Employee not found. |
-| Rejection submitted without a reason | 400 | Rejection reason is required. |
-| Approved request cancelled by employee | 403 | Only the manager can cancel an approved request. |
-| Already approved/rejected/cancelled request approved again | 400 | This leave request has already been decided. |
+### 1. Invalid date range
 
-All validation rules are enforced on the backend and return clear, human-readable error messages.
+The end date cannot be before the start date. Checked in `LeaveRequestsService.create`, before anything else.
 
----
+### 2. Past start date
 
-## Week 3 Validation Rules
+A new leave request cannot start in the past. Checked in `LeaveRequestsService.create`, right after rule 1.
 
-### 1. Invalid Date Range
+### 3. Remaining balance
 
-The end date cannot be before the start date.
+Per the business brief, the balance is only checked **at approval time**, not at submission — a request can be *submitted* for more days than the employee has left, but it can't be *approved*. Checked in `LeaveRequestsService.approve`.
 
-### 2. Past Start Date
-
-A new leave request cannot start in the past.
-
-### 3. Remaining Balance
-
-The requested business days cannot exceed the employee's remaining leave balance.
-
-Friday and Saturday are excluded when calculating business days.
-
-For example:
+Friday and Saturday are excluded when calculating business days:
 
 ```text
 Thursday → Friday → Saturday → Sunday
@@ -210,25 +195,25 @@ Thursday → Friday → Saturday → Sunday
 Total = 2 business days
 ```
 
-### 4. Overlapping Approved Leave
+### 4. Overlapping approved leave
 
-A new leave request cannot overlap an existing approved leave request for the same employee.
+A request can't be approved if its date range shares even one day with another `APPROVED` request for the same employee. Checked in `LeaveRequestsService.approve`, using a single condition (`existing.endDate >= new.startDate AND existing.startDate <= new.endDate`) that covers every way two date ranges can overlap, rather than a separate check per case.
 
-### 5. Employee Existence
+### 5. Employee existence
 
-A leave request cannot be submitted for an employee who does not exist.
+A leave request cannot be submitted for an employee who does not exist. Checked in `LeaveRequestsService.create`, before any date validation.
 
-### 6. Rejection Reason
+### 6. Rejection reason
 
-Rejecting a leave request requires a rejection reason.
+Rejecting a leave request requires a rejection reason. Checked in `LeaveRequestsService.reject`.
 
-### 7. Cancellation Authorization
+### 7. Cancellation authorization
 
-An approved leave request cannot be cancelled by the employee. Cancellation must be performed by the manager.
+A `PENDING` request can be cancelled by the employee. An `APPROVED` request can only be cancelled by the employee's manager. There's no login yet, so the caller currently identifies themselves by passing `requesterId` in the body; the service checks that `requesterId` matches the employee's `managerId`. This is a placeholder until week 5 introduces real authentication.
 
-### 8. Request Status
+### 8. Request status
 
-A leave request that has already been approved, rejected, or cancelled cannot be approved again.
+A leave request that has already been approved, rejected, or cancelled cannot be approved (or rejected, or cancelled) again — only a `PENDING` request can change status. Checked at the top of `approve`, `reject`, and `cancel`.
 
 ---
 
@@ -251,20 +236,25 @@ A leave request that has already been approved, rejected, or cancelled cannot be
 - `leave-api/.env.example` — example environment configuration
 - `leave-api/package.json` — dependencies and available scripts
 
+### Request collection
+
+- `postman/collections/leave-management-api/` — full request collection (kept locally via Postman's "Work locally with Git"), covering all 8 endpoints plus one failing example per validation rule
+
 ---
 
-## Notes
-
-The API follows a layered architecture:
+## Architecture
 
 ```text
 Controller
     ↓
 Service
     ↓
-Repository / Database
+Repository (TypeORM) / Database
 ```
 
-Controllers are responsible for handling HTTP requests and responses, while business rules and validation are handled in the service layer.
+Controllers handle HTTP requests and responses only. Business rules and validation live in the service layer. Database access goes through TypeORM's `Repository<T>`, using parameterized queries rather than raw SQL string-building.
 
-Database operations use parameterized queries / ORM operations to avoid unsafe SQL construction.
+## Known gaps
+
+- No dedicated Repository class — services inject TypeORM's `Repository<T>` directly rather than going through a repository layer that's the only place allowed to build queries.
+- No authentication yet (week 5) — `reviewerId`/`requesterId` are passed in the request body as a stopgap.

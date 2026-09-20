@@ -1,0 +1,8 @@
+$kind: http-request
+description: ""
+url: http://localhost:3000/leave-requests/59/approve
+method: PATCH
+body:
+  type: json
+  content: "{\r\n  \"reviewerId\": 3\r\n}"
+order: 4503598775223549

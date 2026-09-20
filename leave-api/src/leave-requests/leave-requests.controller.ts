@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { LeaveRequestsService } from './leave-requests.service';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 
@@ -32,7 +41,10 @@ export class LeaveRequestsController {
   }
 
   @Patch(':id/approve')
-  approve(@Param('id', ParseIntPipe) id: number, @Body('reviewerId') reviewerId: number) {
+  approve(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('reviewerId') reviewerId: number,
+  ) {
     return this.leaveRequestsService.approve(id, reviewerId);
   }
 
@@ -46,7 +58,10 @@ export class LeaveRequestsController {
   }
 
   @Patch(':id/cancel')
-  cancel(@Param('id', ParseIntPipe) id: number) {
-    return this.leaveRequestsService.cancel(id);
+  cancel(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('requesterId') requesterId: number,
+  ) {
+    return this.leaveRequestsService.cancel(id, requesterId);
   }
 }

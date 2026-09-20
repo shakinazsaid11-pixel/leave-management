@@ -42,3 +42,53 @@ Feedback from the first pass on the schema, and what changed:
 - **`reviewed_at` and `created_at` are now `TIMESTAMPTZ`.** They're moments in time, not dates — `DATE` stays correct for `start_date`/`end_date`, which have no time component.
 - **`business_days > 0` — is it intended that a weekend-only range can't be recorded?** Yes, kept it. A range that costs zero leave days isn't really "leave" in the sense the balance/overlap rules care about, so there's nothing meaningful for the row to represent. The trade-off: right now the *only* thing stopping this is a raw constraint violation, which is a poor user-facing error message. Application code should validate and reject this earlier with something readable, using the `CHECK` purely as a last-resort safety net rather than the primary defense.
 - **README verification.** Docker isn't available in the environment I'm building in, so I couldn't literally run `docker compose up -d` end-to-end. Instead I replicated Postgres's own init-script behavior directly — same database name, same user, same password, same file order (`1_schema.sql` then `2_seed.sql`) that `docker-compose.yml` specifies — and confirmed the exact `docker exec` command in the README returns the expected row count. Flagging this honestly rather than claiming a Docker run I didn't actually perform; worth a real `docker compose up -d` test on a machine that has Docker before this is treated as fully verified.
+
+## Week 2 — the API
+
+Built the NestJS/TypeORM backend on top of the week-1 schema: all 8 endpoints (`GET /employees`, `GET /employees/:id`, `POST /leave-requests`, `GET /leave-requests` with filtering, `GET /leave-requests/:id`, and the three `PATCH .../approve|reject|cancel` transitions).
+
+**What I built:**
+
+- `EmployeesModule` and `LeaveRequestsModule`, each with entity + service + controller. The remaining-balance calculation lives in the service (business rule spanning two tables, not a query).
+- Business-day counting on `create()`, computed from `startDate`/`endDate` server-side rather than trusted from the client.
+- A response interceptor wrapping every successful response as `{ success: true, data }`.
+- A Postman collection covering all 8 endpoints, including deliberately-broken cases (not-found ids, filters).
+
+**A real bug I hit:** my first `POST /leave-requests` failed with `null value in column "business_days"` — I'd written `create()` to expect `businessDays` in the request body, but the client only ever sends `employeeId`/`startDate`/`endDate`. Fixed by computing it server-side, which is also the more correct design.
+
+**Known gaps carried into week 3, and closed there:**
+
+- Errors weren't wrapped in the same shape as successes — a database constraint violation (past date, overlap, over-balance) reached the caller as a bare `500` with no message. This week's whole point.
+- The day-counting function excluded Sunday/Saturday instead of Friday/Saturday — a real bug, not caught until week 3's business-brief re-read forced a second look at it.
+- No dedicated Repository class — still true; services inject `Repository<T>` directly. Not fixed this week either; noted again below.
+
+## Week 3 — rules and validation
+
+### Before writing any rule code
+
+- Branched `week-03-validation` off `main` (not off `week-02-api`), per the instructions — `main` has the week-1 review fixes that `week-02-api` never picked up. Brought the week-2 API code and Postman collection across with `git checkout week-02-api -- leave-api` / `-- postman .postman` rather than a full merge, so the branch ends up with `main`'s corrected schema underneath and week 2's application code on top, without dragging in whatever `week-02-api`'s own README/LOG state was.
+- Added `.env.example` and rewrote the README's setup section against what the repo actually contains — the `docker exec` command in the old README referenced a container/user name that didn't match `docker-compose.yml`, which would have stopped a fresh clone cold at that exact step.
+- Fixed the day-counting bug from week 2 (see above): `day !== 0 && day !== 6` (excluding Sunday) was wrong; the brief says Friday and Saturday are the weekend. Verified against the brief's own example (Thursday→Sunday = 2 days).
+- Finished the exception filter I'd deferred in week 2, so every error now comes back as `{ success: false, error: { statusCode, message } }` — the same shape family as a success, not NestJS's default `{ message, error, statusCode }`.
+
+### The 8 rules, and where each one lives
+
+All 8 are enforced in the service layer, ahead of the database. Full table with status codes and exact messages is in the README. Notes on the ones that needed real thought:
+
+**Rule 3 (balance) lives in `approve()`, not `create()`.** The brief says explicitly the balance is only reduced on approval, not submission — so a request *can* be submitted for more days than the employee has left; it just can't be *approved*. Getting this wrong (checking at submission time instead) would have blocked a legitimate case: two pending requests that would individually fit, submitted before either is decided.
+
+**Rule 4 (overlap) took the most thinking**, as the brief warned it would. Worked through it by naming the "no overlap" case instead of the "overlap" case — there are two ways two ranges *don't* touch (one ends before the other starts, or starts after the other ends), and everything else is an overlap, regardless of which one is longer, which one started first, or whether one fully contains the other. Negating that two-part "no overlap" condition gives one inequality (`existing.end >= new.start AND existing.start <= new.end`) that covers all seven ways I could draw two ranges relative to each other, with no per-case branching in the code. Tested it against a real overlapping pair through the running API, not just reasoned about on paper — created an approved request, then tried to approve a second one that shared a few days with it, and got a 409 naming the conflicting range.
+
+**Rule 7 (who can cancel) needed an assumption**, since there's no login yet. Went with a `requesterId` in the request body, checked against the employee's `manager_id` in the `employee` table — closer to the real rule than a bare `role` field the caller could just claim, and it reuses the manager relationship that's already in the schema rather than inventing a new one. This is explicitly a stopgap: week 5's real auth should replace `requesterId` with whoever the token says is calling, and the check itself doesn't need to change.
+
+### Known gaps still open
+
+- **No dedicated Repository class**, third week running. `LeaveRequestsService` builds its own `createQueryBuilder` chains for filtering and for the overlap/balance checks — query-building that arguably belongs one layer down. Hasn't blocked anything yet, but worth deciding whether to do before week 4 adds more surface area to the service.
+- **Rule 4 and the concurrent-approval question.** My check is a read (find an overlapping approved request) followed by a write (save as approved) — two separate statements, not one atomic operation. If two managers approved two different overlapping requests for the same employee at the exact same moment, both reads could run before either write lands, and both would find nothing to object to. The week-1 `GIST EXCLUDE` constraint is what actually closes this gap — it's enforced by Postgres itself, at the database level, in a way a single service-layer check running twice in parallel can't be. Worth confirming on the call whether relying on the DB constraint as the final backstop here (with the service check as the fast/friendly path) is considered sufficient, or whether the approve endpoint needs an explicit lock.
+- **`requesterId`/`reviewerId` as plain body fields.** Anyone can currently claim to be anyone. Acceptable as a week-3 stopgap per the brief, not acceptable past week 5.
+
+### Questions I'm bringing to the call
+
+- Is the `requesterId`-in-body approach for rule 7 the right shape to build week 5's auth on top of, or would a different placeholder be less to unwind later?
+- For the concurrent-approval race (see above) — is the database constraint an acceptable final backstop, or does this need explicit locking in the service now?
+- Rule 4's overlap check currently treats "touching but not sharing a day" as no conflict (e.g., one request ending the 10th and another starting the 10th only overlap because both dates are inclusive) — confirm that inclusive-on-both-ends is actually the intended definition of overlap.
