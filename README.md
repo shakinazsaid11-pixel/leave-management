@@ -152,10 +152,10 @@ Important database design decisions:
 - Friday and Saturday are excluded when calculating business days.
 - `start_date` and `end_date` use `DATE`.
 - Timestamp columns use `TIMESTAMPTZ`.
-- The rule that a leave request cannot start in the past is enforced at the database level (a `CHECK` constraint) **and** re-checked in the application layer, so the caller gets a clear message instead of a raw database error.
+- The rule that a leave request cannot start in the past is enforced only in the application layer (`LeaveRequestsService.create`) — the equivalent database `CHECK` constraint is commented out in `schema.sql`, since a schema shouldn't refuse to store leave that genuinely happened in the past (history, migrations, reporting).
 - Approved leave overlap is prevented at the database level (a `GIST EXCLUDE` constraint) **and** re-checked in the application layer for the same reason.
 - Balance enforcement is backed by a database trigger, with the same check duplicated in the service for a clean error message.
-- Cancelling an approved request keeps its review history.
+- Cancelling an approved request keeps its review history — `reviewerId`/`reviewedAt` are never cleared, even when a manager later cancels an approved request.
 
 ---
 
@@ -180,7 +180,7 @@ The end date cannot be before the start date. Checked in `LeaveRequestsService.c
 
 ### 2. Past start date
 
-A new leave request cannot start in the past. Checked in `LeaveRequestsService.create`, right after rule 1.
+A new leave request cannot start in the past. Checked in `LeaveRequestsService.create`, right after rule 1 — compared against the start of today (not the current moment), so a request starting today is allowed rather than refused.
 
 ### 3. Remaining balance
 
@@ -197,7 +197,9 @@ Total = 2 business days
 
 ### 4. Overlapping approved leave
 
-A request can't be approved if its date range shares even one day with another `APPROVED` request for the same employee. Checked in `LeaveRequestsService.approve`, using a single condition (`existing.endDate >= new.startDate AND existing.startDate <= new.endDate`) that covers every way two date ranges can overlap, rather than a separate check per case.
+A request can't be approved if its date range shares even one day with another `APPROVED` request for the same employee. Checked in `LeaveRequestsService.approve`, using a single condition (`existing.endDate >= new.startDate AND existing.startDate <= new.endDate`) that covers every way two date ranges can overlap, rather than a separate check per case. Both end dates count as part of the leave (inclusive on both ends).
+
+The final backstop against a true concurrent-approval race (two managers approving two overlapping requests for the same employee at the same instant) is the week-1 `GIST EXCLUDE` constraint, enforced by Postgres itself — a single service-layer check running twice in parallel can't fully close that gap on its own.
 
 ### 5. Employee existence
 

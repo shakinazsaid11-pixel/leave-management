@@ -38,7 +38,12 @@ export class LeaveRequestsService {
       throw new BadRequestException('End date cannot be before start date');
     }
 
-    if (new Date(dto.startDate) < new Date()) {
+    // Compare against the start of today, not the current moment — a
+    // request starting today should be allowed, not refused just because
+    // midnight UTC today is "earlier" than right now.
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    if (new Date(dto.startDate) < today) {
       throw new BadRequestException('Start date cannot be in the past');
     }
 
@@ -217,9 +222,9 @@ export class LeaveRequestsService {
       );
     }
 
+    // Cancelling keeps the review history — who approved it and when stays
+    // on the record even after it's cancelled, per Tamer's review.
     leaveRequest.status = 'CANCELLED';
-    leaveRequest.reviewerId = null;
-    leaveRequest.reviewedAt = null;
 
     return this.leaveRequestRepo.save(leaveRequest);
   }
