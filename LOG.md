@@ -92,3 +92,55 @@ All 8 are enforced in the service layer, ahead of the database. Full table with 
 - Is the `requesterId`-in-body approach for rule 7 the right shape to build week 5's auth on top of, or would a different placeholder be less to unwind later?
 - For the concurrent-approval race (see above) — is the database constraint an acceptable final backstop, or does this need explicit locking in the service now?
 - Rule 4's overlap check currently treats "touching but not sharing a day" as no conflict (e.g., one request ending the 10th and another starting the 10th only overlap because both dates are inclusive) — confirm that inclusive-on-both-ends is actually the intended definition of overlap.
+
+## Week 4 — the user interface
+
+### Before writing any screen code
+
+- Created `week-04-frontend` from `week-03-validation`, not from `main`, and opened the pull request into `week-03-validation` so it shows only this week's work.
+- Did the two API tasks first, because the screens would otherwise send real, messy input to an API that answers every failure with an Internal server error: input checks (`ValidationPipe` and class-validator on the DTOs) and error logging in the exception filter.
+
+### What I built
+
+Three screens (My requests, New request, Approvals) with loading, empty, error and loaded states, an employee menu standing in for login, and one `api.ts` file that is the only place that talks to the API. Every failure leaves that file as one kind of error whose message is already safe to show, and any 500 is turned into a plain sentence there so technical wording can never reach the screen.
+
+### Decisions and what I changed in the API
+
+**The day count on the form comes from the API.** I added `GET /leave-requests/preview`, which calls the same `validateRange` function that `POST /leave-requests` uses. The number the person sees before submitting is therefore the number that gets stored, and the form shows the API's own refusal (weekend only, past date, end before start) in the same place.
+
+**Input checks refuse early, with plain sentences.** A weekend only range now returns a 400 before any query runs (before, it reached the `business_days > 0` constraint and came back as a 500). `stopAtFirstError` stops one bad date from producing the same message twice.
+
+**Error logging keeps the details and hides them from the user.** Unexpected failures are written with method, URL and stack; expected refusals are written as warnings. I also mapped the database's own rule violations (overlap, balance trigger, check and foreign key) to readable messages so the safety net from week 1 no longer shows up as a bare 500. I proved the logging works by stopping the database and reading the log line (`ECONNREFUSED`) while the caller only saw the tidy message.
+
+**Messages written for screens.** Old API messages like `Leave request 5 is APPROVED, cannot approve` or `2026-08-30 to 2026-09-02` were developer language and raw dates. They are now sentences with dates as `dd-MMM-yy`.
+
+**The approvals screen only shows what a manager can act on.** Added a `managerId` filter plus the employee's name to the list endpoint, instead of fetching everything and filtering in the browser, since the browser should not hold other people's requests it does not need.
+
+### Answers to the three questions
+
+**1. Between clicking approve and the list refreshing, what does the user see? What stops three clicks?** The button changes to "Approving..." and every approve and reject button on the list is disabled until the request finishes. Disabling a button through state is not instant, because React re-renders after the click, so a fast double click could still get through. A flag held in a `useRef` changes immediately and makes the second and third clicks do nothing. When the action ends, successfully or not, the list is reloaded so the screen shows what is really stored, and the result (or the API's refusal) is shown above the list.
+
+**2. Is the day shown on screen the day stored in the database?** Date columns arrive as `YYYY-MM-DD` strings. `formatDate` splits the string and never builds a `Date`, because `new Date("2026-08-30")` is midnight UTC and reading it back in a browser behind UTC would show the 29th. I checked by comparing screens against the seed (for example 04-Oct-26 and 16-Jul-26 for Sara Youssef match the rows in `seed.sql`). Timestamps (`createdAt`, `reviewedAt`) do have a real moment, so `formatDateTime` adds three hours and reads date and time from the same shifted value, as agreed (UTC+3). That is a fixed offset, so it will not follow a daylight saving change.
+
+**3. Where does the number of days come from?** From the API (`/leave-requests/preview`), and the API has one counting function, `countBusinessDays`. There is no second copy in the browser, so the day the client adds a public holiday it is changed in one place and the form, the stored value and the balance check all follow.
+
+### Problems I hit
+
+- The balance type in `api.ts` said `year` while the API returns `balanceYear`, so the year was missing from the balance sentence until I matched the two.
+- `GET /leave-requests/preview` has to be declared before `GET /leave-requests/:id`, otherwise Nest reads the word "preview" as a request id.
+- The frontend and the API both default to port 3000, so the frontend runs on 3001.
+- The first navigation used plain links, which reload the page and reset the chosen employee to the first one; switched to Next's `Link`.
+
+### Known gaps
+
+- No dedicated Repository class, fourth week running (services still inject `Repository<T>`).
+- Reviewer and requester are still plain body fields, now with a check that the reviewer exists, but not that they manage the employee. Any employee id can approve. Real authentication is week 5.
+- Employees marked inactive still appear in the person menu.
+- The UTC+3 offset is fixed, not a real timezone.
+- No automated tests for the screens; everything was checked by hand against the running API.
+
+### Questions I'm bringing to the call
+
+- Should approving be limited to the employee's own manager now, or wait for authentication in week 5?
+- Is a fixed UTC+3 acceptable, or should timestamps follow a real timezone with daylight saving?
+- Inactive employees: hide them from the menu, or show them marked as inactive?

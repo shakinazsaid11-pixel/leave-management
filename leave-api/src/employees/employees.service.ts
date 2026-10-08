@@ -16,24 +16,40 @@ export class EmployeesService {
     private readonly leaveRequestRepo: Repository<LeaveRequest>,
   ) {}
 
+  // Ordered so the employee selector always lists people in the same order.
   findAll(): Promise<Employee[]> {
-    return this.employeeRepo.find();
+    return this.employeeRepo.find({ order: { employeeId: 'ASC' } });
   }
 
   async findOne(id: number) {
-    const employee = await this.employeeRepo.findOne({ where: { employeeId: id } });
+    const employee = await this.employeeRepo.findOne({
+      where: { employeeId: id },
+    });
     if (!employee) {
       throw new NotFoundException(`Employee ${id} was not found`);
     }
 
     const year = new Date().getFullYear();
-    const remainingDays = await this.getRemainingBalance(id, year);
+    const { totalDays, usedDays } = await this.getBalance(id, year);
 
-    return { ...employee, remainingDays, balanceYear: year };
+    return {
+      ...employee,
+      balanceYear: year,
+      totalDays,
+      usedDays,
+      remainingDays: totalDays - usedDays,
+    };
   }
 
-  private async getRemainingBalance(employeeId: number, year: number): Promise<number> {
-    const balance = await this.balanceRepo.findOne({ where: { employeeId, year } });
+  // Total entitlement for the year, and how much of it APPROVED requests
+  // have already used.
+  private async getBalance(
+    employeeId: number,
+    year: number,
+  ): Promise<{ totalDays: number; usedDays: number }> {
+    const balance = await this.balanceRepo.findOne({
+      where: { employeeId, year },
+    });
     const totalDays = balance?.totalDays ?? 0;
 
     const { sum } = await this.leaveRequestRepo
@@ -44,6 +60,6 @@ export class EmployeesService {
       .andWhere('EXTRACT(YEAR FROM lr.startDate) = :year', { year })
       .getRawOne();
 
-    return totalDays - Number(sum);
+    return { totalDays, usedDays: Number(sum) };
   }
 }

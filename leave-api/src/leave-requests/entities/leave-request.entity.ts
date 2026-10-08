@@ -27,7 +27,10 @@ export class LeaveRequest {
   reviewedAt: Date | null;
 
   @Column({ name: 'rejection_reason', type: 'varchar', length: 255, nullable: true })
- rejectionReason: string | null;
+  rejectionReason: string | null;
+
+  @Column({ name: 'note', type: 'varchar', length: 500, nullable: true })
+  note: string | null;
 
   @Column({ name: 'created_at', type: 'timestamp' })
   createdAt: Date;

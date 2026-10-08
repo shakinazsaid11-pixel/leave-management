@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { LeaveRequestsService } from './leave-requests.service';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
+import { PreviewLeaveRequestDto } from './dto/preview-leave-request.dto';
 
 @Controller('leave-requests')
 export class LeaveRequestsController {
@@ -23,16 +24,25 @@ export class LeaveRequestsController {
   @Get()
   findAll(
     @Query('employeeId') employeeId?: string,
+    @Query('managerId') managerId?: string,
     @Query('status') status?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
     return this.leaveRequestsService.findAll({
       employeeId: employeeId ? Number(employeeId) : undefined,
+      managerId: managerId ? Number(managerId) : undefined,
       status,
       from,
       to,
     });
+  }
+
+  // This route must come before ':id', otherwise Nest would treat the word
+  // "preview" as a request id.
+  @Get('preview')
+  preview(@Query() query: PreviewLeaveRequestDto) {
+    return this.leaveRequestsService.preview(query.startDate, query.endDate);
   }
 
   @Get(':id')
