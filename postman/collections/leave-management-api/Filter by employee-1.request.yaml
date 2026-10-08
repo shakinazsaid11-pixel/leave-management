@@ -1,0 +1,8 @@
+$kind: http-request
+name: Filter by employee
+description: ""
+url: http://localhost:3000/leave-requests?employeeId=8
+method: GET
+queryParams:
+  employeeId: "8"
+order: 4283666101366366

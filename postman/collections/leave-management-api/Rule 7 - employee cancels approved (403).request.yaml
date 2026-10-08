@@ -1,0 +1,8 @@
+$kind: http-request
+description: ""
+url: http://localhost:3000/leave-requests/12/cancel
+method: PATCH
+body:
+  type: json
+  content: "{\r\n  \"requesterId\": 3\r\n}"
+order: 4503598702583422
