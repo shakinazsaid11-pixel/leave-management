@@ -97,7 +97,7 @@ All 8 are enforced in the service layer, ahead of the database. Full table with 
 
 ### Before writing any screen code
 
-- Created `week-04-frontend` from `week-03-validation`, not from `main`, and opened the pull request into `week-03-validation` so it shows only this week's work.
+- Created `week-04-frontend` from `week-03-validation`. The week 4 pull request into `main` is #3, opened on 14-Oct-26 and not merged.
 - Did the two API tasks first, because the screens would otherwise send real, messy input to an API that answers every failure with an Internal server error: input checks (`ValidationPipe` and class-validator on the DTOs) and error logging in the exception filter.
 
 ### What I built
