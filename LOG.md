@@ -102,7 +102,7 @@ All 8 are enforced in the service layer, ahead of the database. Full table with 
 
 ### What I built
 
-Three screens (My requests, New request, Approvals) with loading, empty, error and loaded states, an employee menu standing in for login, and one `api.ts` file that is the only place that talks to the API. Every failure leaves that file as one kind of error whose message is already safe to show, and any 500 is turned into a plain sentence there so technical wording can never reach the screen.
+Three screens (My requests, New request, Approvals) with loading, empty, error and loaded states, an employee menu standing in for login, and one `api.ts` file that is the only place that talks to the API. Every failure leaves that file as one kind of error whose message is already safe to show, and any 500 is turned into a plain sentence there so technical wording can never reach the screen. Screenshots of each state are in `docs/screenshots/`.
 
 ### Decisions and what I changed in the API
 
@@ -116,13 +116,29 @@ Three screens (My requests, New request, Approvals) with loading, empty, error a
 
 **The approvals screen only shows what a manager can act on.** Added a `managerId` filter plus the employee's name to the list endpoint, instead of fetching everything and filtering in the browser, since the browser should not hold other people's requests it does not need.
 
+### Fixes after the week 4 review
+
+1. **My requests showed the wrong person when switching quickly.** The answer for the first person could arrive after the answer for the second and overwrite it. Now each loaded result is kept together with the id of the person it was loaded for, the screen shows "Loading" until the result matches the person chosen, and an effect that has been replaced ignores its late answer (the `cancelled` flag). The same idea is used on New request, where each day count is kept with the dates it was asked for.
+2. **Empty box when the server was down.** When the list of people failed to load, My requests returned nothing and the message only appeared in the top bar. All three screens now show the message in the middle of the page with a "Try again" button.
+3. **Anyone could approve, even their own request.** The screen only showed the buttons to managers, but the API accepted any `reviewerId`. `approve` and `reject` now check on the server that the reviewer is the manager of the employee who made the request (`assertReviewerManagesEmployee`). That also stops anyone reviewing their own request, because nobody is their own manager. The check runs before the status and the reason, so someone who is not allowed to decide learns nothing about the request. An employee with no manager gets a separate message saying so.
+4. **An approval refusal is shown on the request it belongs to,** inside that request's card, not above the list. The success message stays above the list.
+5. **`npm run lint` passes** in both `leave-frontend` and `leave-api`. The three frontend errors were all React's rule against calling `setState` directly inside an effect. They are fixed by computing the idle and loading states from what is already known instead of storing them, and on Approvals by splitting the screen in two and giving the inner list a `key` so it starts from scratch when the manager changes. The API had `any` values flagged in the filter, the interceptor and the employees service, which now have real types. `npm run build` passes in both.
+6. **`leave-frontend/.env.example` is committed** (the `.gitignore` pattern `.env*` was hiding it, so it now has an exception for that one file) and `leave-frontend/README.md` replaces the default text.
+7. **The log said the pull request was opened when it was not.** It is opened now, and the line above reflects the real state.
+
 ### Answers to the three questions
 
-**1. Between clicking approve and the list refreshing, what does the user see? What stops three clicks?** The button changes to "Approving..." and every approve and reject button on the list is disabled until the request finishes. Disabling a button through state is not instant, because React re-renders after the click, so a fast double click could still get through. A flag held in a `useRef` changes immediately and makes the second and third clicks do nothing. When the action ends, successfully or not, the list is reloaded so the screen shows what is really stored, and the result (or the API's refusal) is shown above the list.
+**1. Why do I need both `busyRef` and `busyId` on the Approvals page?** They do different jobs. `busyId` is state, so the screen can show it: the clicked button changes to "Approving..." and every approve and reject button is disabled. But state changes only show up after React renders again, so a fast second or third click can arrive before the buttons are disabled. `busyRef` is a plain value that changes immediately, so the action checks it first and ignores any click while another one is running. One tells the user what is happening, the other makes sure it happens only once.
 
-**2. Is the day shown on screen the day stored in the database?** Date columns arrive as `YYYY-MM-DD` strings. `formatDate` splits the string and never builds a `Date`, because `new Date("2026-08-30")` is midnight UTC and reading it back in a browser behind UTC would show the 29th. I checked by comparing screens against the seed (for example 04-Oct-26 and 16-Jul-26 for Sara Youssef match the rows in `seed.sql`). Timestamps (`createdAt`, `reviewedAt`) do have a real moment, so `formatDateTime` adds three hours and reads date and time from the same shifted value, as agreed (UTC+3). That is a fixed offset, so it will not follow a daylight saving change.
+**2. What does the `cancelled` flag in a `useEffect` do?** Each time the effect runs it starts a request and creates its own flag. When the effect runs again (the person was switched) or the screen leaves, React first runs the cleanup of the old one, which sets that flag to true. If the old answer arrives late, it sees its flag and does not write to the state. Without it, a slow answer for the previous person could overwrite the current one, which is the bug on My requests.
 
-**3. Where does the number of days come from?** From the API (`/leave-requests/preview`), and the API has one counting function, `countBusinessDays`. There is no second copy in the browser, so the day the client adds a public holiday it is changed in one place and the form, the stored value and the balance check all follow.
+**3. Nourhan has no manager, so nobody sees her requests. What would I propose?** The API now refuses to let anyone review them and says why, so nothing slips through, but her requests stay pending forever, which is a business decision and not a technical one. My proposal is that the client names a reviewer for the top of the tree (for example another senior manager or HR), stored in the data as a field on the employee so it is a rule and not code. Until they decide, her requests stay pending and the message explains it.
+
+### Questions from the first brief, still true
+
+**Is the day shown on screen the day stored in the database?** Date columns arrive as `YYYY-MM-DD` strings. `formatDate` splits the string and never builds a `Date`, because `new Date("2026-08-30")` is midnight UTC and reading it back in a browser behind UTC would show the 29th. I checked by comparing screens against the seed (for example 04-Oct-26 and 16-Jul-26 for Sara Youssef match the rows in `seed.sql`). A moment like `createdAt` is different: it is one instant stored in UTC and must be shown in a real timezone. `formatDateTime` uses `Intl` with `Africa/Cairo`, which follows Egypt's clock changes, and replaces an earlier version that added a fixed 3 hours and would have been an hour wrong for half the year. No screen shows a time of day yet, so it is ready but not visible.
+
+**Where does the number of days come from?** From the API (`/leave-requests/preview`), and the API has one counting function, `countBusinessDays`. There is no second copy in the browser, so the day the client adds a public holiday it is changed in one place and the form, the stored value and the balance check all follow.
 
 ### Problems I hit
 
@@ -130,17 +146,26 @@ Three screens (My requests, New request, Approvals) with loading, empty, error a
 - `GET /leave-requests/preview` has to be declared before `GET /leave-requests/:id`, otherwise Nest reads the word "preview" as a request id.
 - The frontend and the API both default to port 3000, so the frontend runs on 3001.
 - The first navigation used plain links, which reload the page and reset the chosen employee to the first one; switched to Next's `Link`.
+- I only ran `lint` and `build` at the very end the first time, so three errors reached the review. They are part of the checklist before every submission now.
+
+### Checked by hand
+
+- Approving or rejecting through the API (Postman) as the employee herself, as a manager of someone else, as the employee's real manager's report, and for an employee with no manager: all return 403 with the right message. Approving as the real manager still works from the Approvals screen.
+- The balance on My requests matches the seed (for example 16 of 21 for Sara Youssef after her approved days).
+- The overlap refusal shows as a sentence with dates as `dd-MMM-yy`.
+- `npm run lint` and `npm run build` pass in both folders.
 
 ### Known gaps
 
 - No dedicated Repository class, fourth week running (services still inject `Repository<T>`).
-- Reviewer and requester are still plain body fields, now with a check that the reviewer exists, but not that they manage the employee. Any employee id can approve. Real authentication is week 5.
+- Who is calling (`reviewerId`, `requesterId`) is still sent in the request body. The server now checks it against the employee's manager, but anyone calling the API directly can still claim to be that manager. Real authentication in week 5 replaces this.
+- Nourhan's requests cannot be reviewed by anyone until the client decides who reviews them.
 - Employees marked inactive still appear in the person menu.
-- The UTC+3 offset is fixed, not a real timezone.
+- `formatDateTime` is not used on any screen yet.
 - No automated tests for the screens; everything was checked by hand against the running API.
 
 ### Questions I'm bringing to the call
 
-- Should approving be limited to the employee's own manager now, or wait for authentication in week 5?
-- Is a fixed UTC+3 acceptable, or should timestamps follow a real timezone with daylight saving?
+- Who reviews the requests of an employee with no manager?
 - Inactive employees: hide them from the menu, or show them marked as inactive?
+- Should a public holiday calendar be part of the API now, since the day count already lives in one place?
