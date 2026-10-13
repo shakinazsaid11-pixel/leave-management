@@ -1,6 +1,6 @@
-# Leave Management API
+# Leave Management System
 
-Backend API for the Leave Management System, built with NestJS, TypeORM, and PostgreSQL.
+Leave management system built with NestJS, TypeORM, PostgreSQL and a Next.js frontend.
 
 ## Project Structure
 
@@ -9,10 +9,12 @@ leave-management/
 ├── db/
 ├── docs/
 ├── leave-api/
+├── leave-frontend/
 └── docker-compose.yml
 ```
 
 - `leave-api/` — NestJS backend API
+- `leave-frontend/` — Next.js user interface
 - `db/` — PostgreSQL schema and seed data
 - `docs/` — ER diagram and documentation
 - `docker-compose.yml` — PostgreSQL container setup
@@ -91,9 +93,46 @@ npm run build
 
 The API runs on the port configured in `.env` (`http://localhost:3000` by default).
 
+### 5. Run the frontend
+
+The API must already be running (it uses port 3000), so the frontend runs on port 3001.
+
+From the project root:
+
+```bash
+cd leave-frontend
+npm install
+```
+
+Copy `.env.example` to `.env.local`. It holds the address of the API:
+
+```bash
+cp .env.example .env.local
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env.local
+```
+
+The default (`http://localhost:3000`) matches the API's default port. `.env.local` is local configuration and should not be committed.
+
+Start it:
+
+```bash
+npm run dev -- -p 3001
+```
+
+Then open `http://localhost:3001`. There is no login yet, so the menu at the top right switches between people while testing.
+
+More detail is in `leave-frontend/README.md`.
+
 ---
 
 ## Available Scripts
+
+API (`leave-api`):
 
 ```bash
 npm run build
@@ -107,6 +146,15 @@ npm run test
 npm run test:watch
 npm run test:cov
 npm run test:e2e
+```
+
+Frontend (`leave-frontend`):
+
+```bash
+npm run dev -- -p 3001
+npm run build
+npm run start
+npm run lint
 ```
 
 ---
@@ -165,14 +213,16 @@ Every rule below is enforced in the **service layer**, before the database is ev
 
 | # | Rule | Status | Message |
 |---|---|---:|---|
-| 1 | End date is before start date | 400 | `End date cannot be before start date` |
-| 2 | Start date is in the past | 400 | `Start date cannot be in the past` |
-| 3 | Requested days exceed remaining balance | 400 | `You have X day(s) remaining and this request needs Y day(s)` |
-| 4 | Dates overlap an existing approved request | 409 | `This request overlaps an existing approved request (start to end)` |
-| 5 | Employee does not exist | 400 | `Employee X does not exist` |
-| 6 | Rejection submitted without a reason | 400 | `A rejection reason is required` |
-| 7 | Approved request cancelled by the employee (not their manager) | 403 | `An approved request can only be cancelled by the employee's manager` |
-| 8 | Request already approved/rejected/cancelled, approved again | 400 | `Leave request X is <status>, cannot approve` |
+| 1 | End date is before start date | 400 | `The end date cannot be before the start date.` |
+| 2 | Start date is in the past | 400 | `The start date cannot be in the past.` |
+| 3 | Requested days exceed remaining balance | 400 | `This employee has X day(s) left and this request needs Y day(s).` |
+| 4 | Dates overlap an existing approved request | 409 | `This request overlaps approved leave from dd-MMM-yy to dd-MMM-yy.` |
+| 5 | Employee does not exist | 400 | `We could not find this employee.` |
+| 6 | Rejection submitted without a reason | 400 | `Please give a reason for rejecting this request.` |
+| 7 | Approved request cancelled by the employee (not their manager) | 403 | `Only the employee's manager can cancel an approved request.` |
+| 8 | Request is no longer pending, reviewed or cancelled again | 400 | `This request is no longer waiting for review, so it cannot be approved.` (same wording for reject, and a matching one for cancel) |
+| 9 | Approve or reject by someone who is not the employee's manager (including the employee) | 403 | `Only the employee's manager can approve or reject this request.` |
+| 10 | Approve or reject a request of an employee who has no manager | 403 | `This employee has no manager, so nobody can review this request yet.` |
 
 ### 1. Invalid date range
 
@@ -203,11 +253,11 @@ The final backstop against a true concurrent-approval race (two managers approvi
 
 ### 5. Employee existence
 
-A leave request cannot be submitted for an employee who does not exist. Checked in `LeaveRequestsService.create`, before any date validation.
+A leave request cannot be submitted for an employee who does not exist. Checked in `LeaveRequestsService.create`, after the date checks and before the request is saved.
 
 ### 6. Rejection reason
 
-Rejecting a leave request requires a rejection reason. Checked in `LeaveRequestsService.reject`.
+Rejecting a leave request requires a rejection reason (spaces only do not count, and the reason is limited to 255 characters). Checked in `LeaveRequestsService.reject`.
 
 ### 7. Cancellation authorization
 
@@ -215,7 +265,57 @@ A `PENDING` request can be cancelled by the employee. An `APPROVED` request can 
 
 ### 8. Request status
 
-A leave request that has already been approved, rejected, or cancelled cannot be approved (or rejected, or cancelled) again — only a `PENDING` request can change status. Checked at the top of `approve`, `reject`, and `cancel`.
+A leave request that has already been approved, rejected, or cancelled cannot be approved (or rejected, or cancelled) again — only a `PENDING` request can change status. Checked in `approve`, `reject`, and `cancel`.
+
+### 9 and 10. Who may approve or reject
+
+Only the manager of the employee who made the request can approve or reject it, so nobody can review their own request. The screen only shows the buttons to managers, but the rule is enforced on the server in `LeaveRequestsService.assertReviewerManagesEmployee`, because the API can be called without the screen. It is checked before the status and the reason, so someone who is not allowed to decide learns nothing about the request.
+
+An employee with no manager (Nourhan in the seed data) has nobody who can review the request, and the API says so instead of letting anyone through. This needs a decision from the client (see `LOG.md`).
+
+---
+
+## Week 4 — User interface and input checks
+
+### Screens
+
+- **My requests** — remaining balance for the year and a table of the person's own requests (dates, days, status, rejection reason).
+- **New request** — start date, end date and an optional note. The number of days that will be deducted comes from the API before submitting, and a refusal from the API is shown next to the form.
+- **Approvals** — for managers: the requests waiting on their team, each with an approve and a reject button. Rejecting asks for a reason and cannot go ahead without one. A refusal from the API is shown on the request it belongs to.
+
+Every screen handles four states: loading, empty, error (for example the API is stopped) and loaded. No data is written into the pages; everything comes from the API.
+
+### API changes made for the screens
+
+| Change | Why |
+|---|---|
+| `note` field on a request (entity, DTO, service) | The new request form has an optional note |
+| `GET /leave-requests/preview?startDate=&endDate=` | The form shows the days to be deducted. It uses the same function as `POST /leave-requests`, so the two can never disagree |
+| `managerId` filter and `employeeName` on `GET /leave-requests` | The approvals screen needs the manager's team and the names |
+| Requests and employees returned in a fixed order | Lists look the same every time |
+| `totalDays`, `usedDays`, `remainingDays`, `balanceYear` on `GET /employees/:id` | The balance shown on My requests |
+
+### Input checks
+
+Input is checked before the service or the database is asked, using `ValidationPipe` and class-validator on the DTOs:
+
+| Input | Status | Message |
+|---|---:|---|
+| Missing or invalid date | 400 | `Please enter the start date as a valid date.` (or end date) |
+| Note longer than 500 characters | 400 | `The note can be at most 500 characters.` |
+| Only Friday and Saturday chosen | 400 | `The dates you chose have no working days. Please choose at least one day from Sunday to Thursday.` |
+| Reviewer missing or unknown | 400 | `Please choose who is reviewing this request.` |
+| Rejection reason empty or only spaces | 400 | `Please give a reason for rejecting this request.` |
+
+### Error logging
+
+`AllExceptionsFilter` writes every failure to the server log with the method, the URL and the status. Unexpected failures are logged as errors with the full stack trace, and expected refusals (400 to 499) as warnings. Database rule violations (overlap, balance, check constraints) are turned into plain messages instead of a generic 500. The caller still only sees a tidy message, never technical details.
+
+### Screen rules
+
+- Dates are shown as `dd-MMM-yy` (for example `24-Sep-26`). Date only values are read straight from the `YYYY-MM-DD` string, never through a `Date` object, so the day can not shift with the timezone. Timestamps are shown in the `Africa/Cairo` timezone, which follows Egypt's clock changes, and never as a fixed number of hours.
+- No developer wording reaches the screen. A failure on the server side always shows "Something went wrong on our side. Please try again in a moment." and an unreachable API shows "We couldn't reach the server."
+- When the person is switched while an answer is still on its way, the old answer is ignored, so the screen never shows one person's data under another person's name.
 
 ---
 
@@ -238,6 +338,14 @@ A leave request that has already been approved, rejected, or cancelled cannot be
 - `leave-api/.env.example` — example environment configuration
 - `leave-api/package.json` — dependencies and available scripts
 
+### Frontend
+
+- `leave-frontend/README.md` — how to run the frontend
+- `leave-frontend/app/` — pages (`page.tsx` is My requests, `new-request/`, `approvals/`), shared layout and components
+- `leave-frontend/lib/api.ts` — the only place that talks to the API
+- `leave-frontend/lib/format.ts` — date formatting
+- `leave-frontend/.env.example` — example frontend configuration
+
 ### Request collection
 
 - `postman/collections/leave-management-api/` — full request collection (kept locally via Postman's "Work locally with Git"), covering all 8 endpoints plus one failing example per validation rule
@@ -256,7 +364,11 @@ Repository (TypeORM) / Database
 
 Controllers handle HTTP requests and responses only. Business rules and validation live in the service layer. Database access goes through TypeORM's `Repository<T>`, using parameterized queries rather than raw SQL string-building.
 
+The frontend talks to the API only through `leave-frontend/lib/api.ts`.
+
 ## Known gaps
 
 - No dedicated Repository class — services inject TypeORM's `Repository<T>` directly rather than going through a repository layer that's the only place allowed to build queries.
-- No authentication yet (week 5) — `reviewerId`/`requesterId` are passed in the request body as a stopgap.
+- Nourhan has no manager, so her requests can not be approved or rejected by anyone yet. This needs a decision from the client (see `LOG.md`).
+- Who is calling is still sent in the request body (`reviewerId`, `requesterId`), so anyone who calls the API directly can claim to be a manager. Real authentication in week 5 replaces this.
+- Employees who are no longer active still appear in the person menu.

@@ -19,8 +19,7 @@ import { LeaveRequestsModule } from './leave-requests/leave-requests.module';
         password: config.get('DB_PASSWORD'),
         database: config.get('DB_DATABASE'),
         autoLoadEntities: true,
-        synchronize: false, 
-      
+        synchronize: false,
       }),
     }),
     EmployeesModule,

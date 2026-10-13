@@ -33,6 +33,7 @@ CREATE TABLE leave_request (
     reviewer_id         INT REFERENCES employee(employee_id),
     reviewed_at         TIMESTAMPTZ,
     rejection_reason   VARCHAR(255),
+    note           VARCHAR(500),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
 	-------CHECK (start_date >= CURRENT_DATE),
 	CHECK (end_date >= start_date),
