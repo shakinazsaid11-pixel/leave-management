@@ -81,14 +81,14 @@ export class LeaveRequestsService {
       );
     }
 
-    // "Today" is the date in Egypt, not in UTC. Dates are YYYY-MM-DD
-    // strings, so they compare correctly as plain strings.
-    const todayInCairo = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Africa/Cairo',
-      }).format(new Date());
-    if (startDate.slice(0, 10) < todayInCairo) {
-    throw new BadRequestException('The start date cannot be in the past.');
-    } 
+    // Compare against the start of today, not the current moment — a
+    // request starting today should be allowed, not refused just because
+    // midnight UTC today is "earlier" than right now.
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    if (start < today) {
+      throw new BadRequestException('The start date cannot be in the past.');
+    }
 
     // A range that only covers weekend days has zero business days, and
     // the database would reject it with a generic error. Refuse it here
@@ -188,6 +188,10 @@ export class LeaveRequestsService {
 
     const leaveRequest = await this.findOne(id);
 
+    // Who may decide is checked first, before anything about the request
+    // is revealed to someone who is not allowed to decide on it.
+    await this.assertReviewerManagesEmployee(reviewerId, leaveRequest);
+
     if (leaveRequest.status !== 'PENDING') {
       throw new BadRequestException(
         'This request is no longer waiting for review, so it cannot be approved.',
@@ -265,6 +269,11 @@ export class LeaveRequestsService {
   ): Promise<LeaveRequest> {
     await this.assertReviewer(reviewerId);
 
+    const leaveRequest = await this.findOne(id);
+
+    // Only the employee's manager may decide, same as for approving.
+    await this.assertReviewerManagesEmployee(reviewerId, leaveRequest);
+
     // A rejection must always come with a reason. Whitespace only does not
     // count, and the database column holds at most 255 characters.
     const cleanReason = typeof reason === 'string' ? reason.trim() : '';
@@ -278,8 +287,6 @@ export class LeaveRequestsService {
         'The reason can be at most 255 characters.',
       );
     }
-
-    const leaveRequest = await this.findOne(id);
 
     if (leaveRequest.status !== 'PENDING') {
       throw new BadRequestException(
@@ -343,6 +350,32 @@ export class LeaveRequestsService {
     });
     if (!reviewer) {
       throw new BadRequestException('We could not find this reviewer.');
+    }
+  }
+
+  // Only the manager of the person who asked for leave may approve or
+  // reject it. That also stops anyone from reviewing their own request,
+  // because nobody is their own manager. The screen only shows the
+  // buttons to managers, but this check is what really enforces the rule,
+  // since the API can be called without the screen.
+  private async assertReviewerManagesEmployee(
+    reviewerId: number,
+    leaveRequest: LeaveRequest,
+  ): Promise<void> {
+    const employee = await this.employeeRepo.findOne({
+      where: { employeeId: leaveRequest.employeeId },
+    });
+
+    if (!employee || employee.managerId === null) {
+      throw new ForbiddenException(
+        'This employee has no manager, so nobody can review this request yet.',
+      );
+    }
+
+    if (employee.managerId !== reviewerId) {
+      throw new ForbiddenException(
+        "Only the employee's manager can approve or reject this request.",
+      );
     }
   }
 

@@ -52,14 +52,14 @@ export class EmployeesService {
     });
     const totalDays = balance?.totalDays ?? 0;
 
-    const { sum } = await this.leaveRequestRepo
+    const row = await this.leaveRequestRepo
       .createQueryBuilder('lr')
       .select('COALESCE(SUM(lr.businessDays), 0)', 'sum')
       .where('lr.employeeId = :employeeId', { employeeId })
       .andWhere('lr.status = :status', { status: 'APPROVED' })
       .andWhere('EXTRACT(YEAR FROM lr.startDate) = :year', { year })
-      .getRawOne();
+      .getRawOne<{ sum: string }>();
 
-    return { totalDays, usedDays: Number(sum) };
+    return { totalDays, usedDays: Number(row?.sum ?? 0) };
   }
 }

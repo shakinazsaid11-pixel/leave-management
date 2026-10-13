@@ -12,22 +12,86 @@ import { formatDate } from "@/lib/format";
 
 const REASON_MAX_LENGTH = 255;
 
+function ErrorBox({ message }: { message: string }) {
+  return (
+    <div
+      className="flex flex-col items-center gap-4 rounded-lg border border-red-400/40 bg-red-500/10 p-6 text-center"
+      role="alert"
+    >
+      <p className="text-red-200">{message}</p>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="rounded-lg bg-azure-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-azure-400"
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
+// Checks the cases that do not depend on the list itself, then hands over
+// to ApprovalsList. The key makes React start ApprovalsList from scratch
+// whenever the manager changes, so nothing from the previous manager (an
+// open reason box, a message, a busy button) can carry over.
 export default function ApprovalsPage() {
   const {
     employees,
     selectedEmployee,
     selectedEmployeeId,
-    loading: employeesLoading,
-    error: employeesError,
+    loading,
+    error,
   } = useEmployeeContext();
 
-  // Only managers have anything to approve.
-  const managerId =
-    selectedEmployee?.role === "MANAGER" ? selectedEmployee.employeeId : null;
+  if (loading) {
+    return (
+      <p className="text-center text-slate-400" role="status">
+        Loading...
+      </p>
+    );
+  }
 
-  const [requests, setRequests] = useState<LeaveRequestWithName[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  if (error) {
+    return <ErrorBox message={error} />;
+  }
+
+  if (employees.length === 0 || selectedEmployeeId === null) {
+    return (
+      <p className="rounded-lg border border-navy-700 bg-navy-900/60 p-6 text-center text-slate-400">
+        There are no employees yet.
+      </p>
+    );
+  }
+
+  // Only managers have anything to approve.
+  if (selectedEmployee?.role !== "MANAGER") {
+    return (
+      <div className="flex flex-col gap-4 text-center">
+        <h1 className="text-3xl font-bold text-white">Approvals</h1>
+        <p className="rounded-lg border border-navy-700 bg-navy-900/60 p-6 text-slate-300">
+          Only managers can review leave requests.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <ApprovalsList
+      key={selectedEmployee.employeeId}
+      managerId={selectedEmployee.employeeId}
+    />
+  );
+}
+
+type Loaded = { requests: LeaveRequestWithName[]; error: string | null };
+
+// A refusal, kept with the request it belongs to so it is shown on that
+// request and not somewhere else on the page.
+type ActionError = { requestId: number; message: string };
+
+function ApprovalsList({ managerId }: { managerId: number }) {
+  // null means the first answer has not arrived yet.
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
 
   // The request being approved or rejected right now, if any.
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -35,44 +99,39 @@ export default function ApprovalsPage() {
   const [rejectingId, setRejectingId] = useState<number | null>(null);
   const [reason, setReason] = useState("");
 
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ActionError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   // A state update is not instant, so a quick double click could slip a
   // second action through before the screen has re-rendered. This flag
   // changes immediately and stops that.
   const busyRef = useRef(false);
-  // Which manager's list is on screen, so a slow answer for someone the
-  // user has already switched away from is ignored.
-  const latestManagerId = useRef<number | null>(null);
+  // False once this list has left the screen, so a late answer is dropped.
+  const aliveRef = useRef(true);
 
   useEffect(() => {
-    latestManagerId.current = managerId;
-    setRejectingId(null);
-    setReason("");
-    setActionError(null);
-    setNotice(null);
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
 
-    if (managerId === null) {
-      setRequests([]);
-      return;
-    }
-
+  useEffect(() => {
+    // If this effect is replaced before the answer arrives, the old
+    // answer is ignored.
     let cancelled = false;
-    setLoading(true);
-    setError(null);
 
     getLeaveRequests({ managerId, status: "PENDING" })
       .then((data) => {
-        if (!cancelled) setRequests(data);
+        if (!cancelled) setLoaded({ requests: data, error: null });
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err.message ?? "We could not load the requests.");
+          setLoaded({
+            requests: [],
+            error: err.message ?? "We could not load the requests.",
+          });
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
 
     return () => {
@@ -80,23 +139,20 @@ export default function ApprovalsPage() {
     };
   }, [managerId]);
 
-  // Reloads the list quietly after an action, without the loading screen.
+  // Reloads the list after an action, without the loading screen.
   async function refreshList() {
-    const id = managerId;
-    if (id === null) return;
     try {
-      const data = await getLeaveRequests({
-        managerId: id,
-        status: "PENDING",
-      });
-      if (latestManagerId.current === id) setRequests(data);
+      const data = await getLeaveRequests({ managerId, status: "PENDING" });
+      if (aliveRef.current) setLoaded({ requests: data, error: null });
     } catch (err) {
-      if (latestManagerId.current === id) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "We could not refresh the list.",
-        );
+      if (aliveRef.current) {
+        setLoaded({
+          requests: [],
+          error:
+            err instanceof Error
+              ? err.message
+              : "We could not refresh the list.",
+        });
       }
     }
   }
@@ -106,7 +162,7 @@ export default function ApprovalsPage() {
     action: () => Promise<unknown>,
     successMessage: string,
   ) {
-    if (busyRef.current || managerId === null) return;
+    if (busyRef.current) return;
     busyRef.current = true;
     setBusyId(request.requestId);
     setActionError(null);
@@ -118,21 +174,22 @@ export default function ApprovalsPage() {
       setReason("");
       setNotice(successMessage);
     } catch (err) {
-      setActionError(
-        err instanceof Error
-          ? err.message
-          : "We could not complete that. Please try again.",
-      );
+      setActionError({
+        requestId: request.requestId,
+        message:
+          err instanceof Error
+            ? err.message
+            : "We could not complete that. Please try again.",
+      });
     } finally {
       // Whatever happened, show the list as it really is now.
       await refreshList();
       busyRef.current = false;
-      setBusyId(null);
+      if (aliveRef.current) setBusyId(null);
     }
   }
 
   function handleApprove(request: LeaveRequestWithName) {
-    if (managerId === null) return;
     runAction(
       request,
       () => approveLeaveRequest(request.requestId, managerId),
@@ -143,7 +200,7 @@ export default function ApprovalsPage() {
   function handleConfirmReject(request: LeaveRequestWithName) {
     const cleanReason = reason.trim();
     // Rejecting never goes ahead without a reason.
-    if (managerId === null || !cleanReason) return;
+    if (!cleanReason) return;
     runAction(
       request,
       () => rejectLeaveRequest(request.requestId, managerId, cleanReason),
@@ -158,49 +215,7 @@ export default function ApprovalsPage() {
     setNotice(null);
   }
 
-  // The list of people is still on its way.
-  if (employeesLoading) {
-    return (
-      <p className="text-center text-slate-400" role="status">
-        Loading...
-      </p>
-    );
-  }
-
-  // The list of people could not be loaded.
-  if (employeesError) {
-    return (
-      <p
-        className="rounded-lg border border-red-400/40 bg-red-500/10 p-4 text-center text-red-200"
-        role="alert"
-      >
-        {employeesError}
-      </p>
-    );
-  }
-
-  if (employees.length === 0 || selectedEmployeeId === null) {
-    return (
-      <p className="rounded-lg border border-navy-700 bg-navy-900/60 p-6 text-center text-slate-400">
-        There are no employees yet.
-      </p>
-    );
-  }
-
-  // The chosen person is not a manager.
-  if (managerId === null) {
-    return (
-      <div className="flex flex-col gap-4 text-center">
-        <h1 className="text-3xl font-bold text-white">Approvals</h1>
-        <p className="rounded-lg border border-navy-700 bg-navy-900/60 p-6 text-slate-300">
-          Only managers can review leave requests. Choose a manager from the
-          menu at the top to see what is waiting for them.
-        </p>
-      </div>
-    );
-  }
-
-  if (loading) {
+  if (loaded === null) {
     return (
       <p className="text-center text-slate-400" role="status">
         Loading the requests waiting for you...
@@ -208,17 +223,11 @@ export default function ApprovalsPage() {
     );
   }
 
-  if (error) {
-    return (
-      <p
-        className="rounded-lg border border-red-400/40 bg-red-500/10 p-4 text-center text-red-200"
-        role="alert"
-      >
-        {error}
-      </p>
-    );
+  if (loaded.error) {
+    return <ErrorBox message={loaded.error} />;
   }
 
+  const requests = loaded.requests;
   const anyBusy = busyId !== null;
 
   return (
@@ -232,18 +241,10 @@ export default function ApprovalsPage() {
         </p>
       </section>
 
-      <div aria-live="polite" className="flex flex-col gap-3">
+      <div aria-live="polite">
         {notice && (
           <p className="rounded-lg border border-emerald-400/40 bg-emerald-500/10 p-3 text-center text-sm text-emerald-200">
             {notice}
-          </p>
-        )}
-        {actionError && (
-          <p
-            className="rounded-lg border border-red-400/40 bg-red-500/10 p-3 text-center text-sm text-red-200"
-            role="alert"
-          >
-            {actionError}
           </p>
         )}
       </div>
@@ -257,6 +258,10 @@ export default function ApprovalsPage() {
           {requests.map((request) => {
             const isBusy = busyId === request.requestId;
             const isRejecting = rejectingId === request.requestId;
+            const refusal =
+              actionError?.requestId === request.requestId
+                ? actionError.message
+                : null;
 
             return (
               <li
@@ -291,7 +296,7 @@ export default function ApprovalsPage() {
                         type="button"
                         onClick={() => handleApprove(request)}
                         disabled={anyBusy}
-                        className="rounded-lg bg-azure-500 px-4 py-2 text-sm font-semibold text-white transition-colors enabled:hover:bg-azure-400 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="select-none rounded-lg bg-azure-500 px-4 py-2 text-sm font-semibold text-white transition-colors enabled:hover:bg-azure-400 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {isBusy ? "Approving..." : "Approve"}
                       </button>
@@ -299,7 +304,7 @@ export default function ApprovalsPage() {
                         type="button"
                         onClick={() => openRejectBox(request.requestId)}
                         disabled={anyBusy}
-                        className="rounded-lg border border-red-400/60 px-4 py-2 text-sm font-semibold text-red-300 transition-colors enabled:hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="select-none rounded-lg border border-red-400/60 px-4 py-2 text-sm font-semibold text-red-300 transition-colors enabled:hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         Reject
                       </button>
@@ -331,7 +336,7 @@ export default function ApprovalsPage() {
                         type="button"
                         onClick={() => setRejectingId(null)}
                         disabled={anyBusy}
-                        className="rounded-lg border border-navy-700 px-4 py-2 text-sm font-semibold text-slate-200 transition-colors enabled:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="select-none rounded-lg border border-navy-700 px-4 py-2 text-sm font-semibold text-slate-200 transition-colors enabled:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         Go back
                       </button>
@@ -339,12 +344,21 @@ export default function ApprovalsPage() {
                         type="button"
                         onClick={() => handleConfirmReject(request)}
                         disabled={anyBusy || reason.trim().length === 0}
-                        className="rounded-lg bg-red-500 px-4 py-2 text-sm font-semibold text-white transition-colors enabled:hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="select-none rounded-lg bg-red-500 px-4 py-2 text-sm font-semibold text-white transition-colors enabled:hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {isBusy ? "Rejecting..." : "Confirm rejection"}
                       </button>
                     </div>
                   </div>
+                )}
+
+                {refusal && (
+                  <p
+                    className="mt-4 rounded-lg border border-red-400/40 bg-red-500/10 p-3 text-center text-sm text-red-200"
+                    role="alert"
+                  >
+                    {refusal}
+                  </p>
                 )}
               </li>
             );

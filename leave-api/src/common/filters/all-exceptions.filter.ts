@@ -18,22 +18,24 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
+    let statusCode: number = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | string[] =
       'Something went wrong on our side. Please try again in a moment.';
 
     if (exception instanceof HttpException) {
       statusCode = exception.getStatus();
       const body = exception.getResponse();
-      message =
-        typeof body === 'string'
-          ? body
-          : ((body as any).message ?? exception.message);
+      if (typeof body === 'string') {
+        message = body;
+      } else {
+        const inner = (body as { message?: string | string[] }).message;
+        message = inner ?? exception.message;
+      }
     } else if (exception instanceof QueryFailedError) {
       // The database refused the change. Turn the rules it enforces into
       // plain sentences; anything we do not recognise stays a generic error.
       const known = this.describeDatabaseError(
-        (exception as any).driverError?.code,
+        this.getDatabaseCode(exception.driverError),
       );
       if (known) {
         statusCode = known.statusCode;
@@ -65,6 +67,20 @@ export class AllExceptionsFilter implements ExceptionFilter {
       success: false,
       error: { statusCode, message },
     });
+  }
+
+  // Reads the Postgres error code (for example "23P01") from the error the
+  // database driver gave, checking its type instead of assuming it.
+  private getDatabaseCode(driverError: unknown): string | undefined {
+    if (
+      typeof driverError === 'object' &&
+      driverError !== null &&
+      'code' in driverError
+    ) {
+      const code = driverError.code;
+      return typeof code === 'string' ? code : undefined;
+    }
+    return undefined;
   }
 
   // Postgres error codes for the rules the schema enforces.

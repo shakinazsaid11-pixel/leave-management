@@ -104,13 +104,19 @@ cd leave-frontend
 npm install
 ```
 
-Create a file named `.env.local` inside `leave-frontend` (next to `package.json`) with the address of the API:
+Copy `.env.example` to `.env.local`. It holds the address of the API:
 
-```text
-NEXT_PUBLIC_API_URL=http://localhost:3000
+```bash
+cp .env.example .env.local
 ```
 
-`.env.example` in the same folder shows the same line. `.env.local` is local configuration and should not be committed.
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env.local
+```
+
+The default (`http://localhost:3000`) matches the API's default port. `.env.local` is local configuration and should not be committed.
 
 Start it:
 
@@ -119,6 +125,8 @@ npm run dev -- -p 3001
 ```
 
 Then open `http://localhost:3001`. There is no login yet, so the menu at the top right switches between people while testing.
+
+More detail is in `leave-frontend/README.md`.
 
 ---
 
@@ -213,6 +221,8 @@ Every rule below is enforced in the **service layer**, before the database is ev
 | 6 | Rejection submitted without a reason | 400 | `Please give a reason for rejecting this request.` |
 | 7 | Approved request cancelled by the employee (not their manager) | 403 | `Only the employee's manager can cancel an approved request.` |
 | 8 | Request is no longer pending, reviewed or cancelled again | 400 | `This request is no longer waiting for review, so it cannot be approved.` (same wording for reject, and a matching one for cancel) |
+| 9 | Approve or reject by someone who is not the employee's manager (including the employee) | 403 | `Only the employee's manager can approve or reject this request.` |
+| 10 | Approve or reject a request of an employee who has no manager | 403 | `This employee has no manager, so nobody can review this request yet.` |
 
 ### 1. Invalid date range
 
@@ -257,6 +267,12 @@ A `PENDING` request can be cancelled by the employee. An `APPROVED` request can 
 
 A leave request that has already been approved, rejected, or cancelled cannot be approved (or rejected, or cancelled) again — only a `PENDING` request can change status. Checked in `approve`, `reject`, and `cancel`.
 
+### 9 and 10. Who may approve or reject
+
+Only the manager of the employee who made the request can approve or reject it, so nobody can review their own request. The screen only shows the buttons to managers, but the rule is enforced on the server in `LeaveRequestsService.assertReviewerManagesEmployee`, because the API can be called without the screen. It is checked before the status and the reason, so someone who is not allowed to decide learns nothing about the request.
+
+An employee with no manager (Nourhan in the seed data) has nobody who can review the request, and the API says so instead of letting anyone through. This needs a decision from the client (see `LOG.md`).
+
 ---
 
 ## Week 4 — User interface and input checks
@@ -265,7 +281,7 @@ A leave request that has already been approved, rejected, or cancelled cannot be
 
 - **My requests** — remaining balance for the year and a table of the person's own requests (dates, days, status, rejection reason).
 - **New request** — start date, end date and an optional note. The number of days that will be deducted comes from the API before submitting, and a refusal from the API is shown next to the form.
-- **Approvals** — for managers: the requests waiting on their team, each with an approve and a reject button. Rejecting asks for a reason and cannot go ahead without one.
+- **Approvals** — for managers: the requests waiting on their team, each with an approve and a reject button. Rejecting asks for a reason and cannot go ahead without one. A refusal from the API is shown on the request it belongs to.
 
 Every screen handles four states: loading, empty, error (for example the API is stopped) and loaded. No data is written into the pages; everything comes from the API.
 
@@ -297,8 +313,9 @@ Input is checked before the service or the database is asked, using `ValidationP
 
 ### Screen rules
 
-- Dates are shown as `dd-MMM-yy` (for example `24-Sep-26`). Date only values are read straight from the `YYYY-MM-DD` string, never through a `Date` object, so the day can not shift with the timezone. Timestamps are shown in UTC+3.
+- Dates are shown as `dd-MMM-yy` (for example `24-Sep-26`). Date only values are read straight from the `YYYY-MM-DD` string, never through a `Date` object, so the day can not shift with the timezone. Timestamps are shown in the `Africa/Cairo` timezone, which follows Egypt's clock changes, and never as a fixed number of hours.
 - No developer wording reaches the screen. A failure on the server side always shows "Something went wrong on our side. Please try again in a moment." and an unreachable API shows "We couldn't reach the server."
+- When the person is switched while an answer is still on its way, the old answer is ignored, so the screen never shows one person's data under another person's name.
 
 ---
 
@@ -323,6 +340,7 @@ Input is checked before the service or the database is asked, using `ValidationP
 
 ### Frontend
 
+- `leave-frontend/README.md` — how to run the frontend
 - `leave-frontend/app/` — pages (`page.tsx` is My requests, `new-request/`, `approvals/`), shared layout and components
 - `leave-frontend/lib/api.ts` — the only place that talks to the API
 - `leave-frontend/lib/format.ts` — date formatting
@@ -351,6 +369,6 @@ The frontend talks to the API only through `leave-frontend/lib/api.ts`.
 ## Known gaps
 
 - No dedicated Repository class — services inject TypeORM's `Repository<T>` directly rather than going through a repository layer that's the only place allowed to build queries.
-- No authentication yet (week 5) — `reviewerId`/`requesterId` are passed in the request body as a stopgap.
-- The reviewer is checked to be a real employee, but not to be the manager of the person who asked. Real checks come with authentication.
+- Nourhan has no manager, so her requests can not be approved or rejected by anyone yet. This needs a decision from the client (see `LOG.md`).
+- Who is calling is still sent in the request body (`reviewerId`, `requesterId`), so anyone who calls the API directly can claim to be a manager. Real authentication in week 5 replaces this.
 - Employees who are no longer active still appear in the person menu.

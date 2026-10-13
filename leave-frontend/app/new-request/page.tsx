@@ -16,6 +16,12 @@ type Preview =
   | { state: "ready"; days: number }
   | { state: "error"; message: string };
 
+// An answer from the API, kept together with the dates it was asked for,
+// so an answer for old dates is never shown for new ones.
+type PreviewAnswer =
+  | { key: string; state: "ready"; days: number }
+  | { key: string; state: "error"; message: string };
+
 // Today as yyyy-mm-dd, built from the local date parts so it never
 // shifts a day the way toISOString would. Only used as a hint on the
 // date picker; the API makes the real decision.
@@ -37,31 +43,35 @@ export default function NewRequestPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [note, setNote] = useState("");
-  const [preview, setPreview] = useState<Preview>({ state: "idle" });
+  const [answer, setAnswer] = useState<PreviewAnswer | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // Identifies the pair of dates currently chosen, or null if either is empty.
+  const previewKey = startDate && endDate ? `${startDate}|${endDate}` : null;
+
   // Ask the API how many days these dates would use, every time they change.
   useEffect(() => {
-    if (!startDate || !endDate) {
-      setPreview({ state: "idle" });
-      return;
-    }
+    if (previewKey === null) return;
 
     // If the dates change again before the answer arrives, ignore the
     // old answer so the screen never shows a number for the wrong dates.
     let cancelled = false;
-    setPreview({ state: "loading" });
 
     previewLeaveRequest(startDate, endDate)
       .then((result) => {
         if (!cancelled) {
-          setPreview({ state: "ready", days: result.businessDays });
+          setAnswer({
+            key: previewKey,
+            state: "ready",
+            days: result.businessDays,
+          });
         }
       })
       .catch((err) => {
         if (!cancelled) {
-          setPreview({
+          setAnswer({
+            key: previewKey,
             state: "error",
             message: err.message ?? "We could not check these dates.",
           });
@@ -71,7 +81,17 @@ export default function NewRequestPage() {
     return () => {
       cancelled = true;
     };
-  }, [startDate, endDate]);
+  }, [previewKey, startDate, endDate]);
+
+  // Worked out from the dates and the latest answer, not stored separately.
+  let preview: Preview;
+  if (previewKey === null) {
+    preview = { state: "idle" };
+  } else if (answer !== null && answer.key === previewKey) {
+    preview = answer;
+  } else {
+    preview = { state: "loading" };
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -111,12 +131,19 @@ export default function NewRequestPage() {
   // The list of people could not be loaded.
   if (error) {
     return (
-      <p
-        className="rounded-lg border border-red-400/40 bg-red-500/10 p-4 text-center text-red-200"
+      <div
+        className="flex flex-col items-center gap-4 rounded-lg border border-red-400/40 bg-red-500/10 p-6 text-center"
         role="alert"
       >
-        {error}
-      </p>
+        <p className="text-red-200">{error}</p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="rounded-lg bg-azure-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-azure-400"
+        >
+          Try again
+        </button>
+      </div>
     );
   }
 

@@ -5,46 +5,106 @@ import { useEmployeeContext } from "@/app/context/employee-context";
 import {
   EmployeeWithBalance,
   LeaveRequest,
+  LeaveRequestWithName,
   getEmployeeWithBalance,
   getLeaveRequests,
 } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 
-export default function MyRequestsPage() {
-  const { selectedEmployeeId } = useEmployeeContext();
+// What was loaded, and for which person. Keeping the person's id with the
+// data means an answer for someone else can never be shown by mistake.
+type Loaded = {
+  employeeId: number;
+  balance: EmployeeWithBalance | null;
+  requests: LeaveRequestWithName[];
+  error: string | null;
+};
 
-  const [balance, setBalance] = useState<EmployeeWithBalance | null>(null);
-  const [requests, setRequests] = useState<LeaveRequest[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+function ErrorBox({ message }: { message: string }) {
+  return (
+    <div
+      className="flex flex-col items-center gap-4 rounded-lg border border-red-400/40 bg-red-500/10 p-6 text-center"
+      role="alert"
+    >
+      <p className="text-red-200">{message}</p>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="rounded-lg bg-azure-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-azure-400"
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
+export default function MyRequestsPage() {
+  const {
+    employees,
+    selectedEmployeeId,
+    loading: employeesLoading,
+    error: employeesError,
+  } = useEmployeeContext();
+
+  const [result, setResult] = useState<Loaded | null>(null);
 
   useEffect(() => {
     if (selectedEmployeeId === null) return;
+    const employeeId = selectedEmployeeId;
 
-    setLoading(true);
-    setError(null);
+    // If the person is changed before the answer arrives, this old
+    // request is ignored.
+    let cancelled = false;
 
     Promise.all([
-      getEmployeeWithBalance(selectedEmployeeId),
-      getLeaveRequests({ employeeId: selectedEmployeeId }),
+      getEmployeeWithBalance(employeeId),
+      getLeaveRequests({ employeeId }),
     ])
-      .then(([balanceData, requestsData]) => {
-        setBalance(balanceData);
-        setRequests(requestsData);
+      .then(([balance, requests]) => {
+        if (!cancelled) {
+          setResult({ employeeId, balance, requests, error: null });
+        }
       })
       .catch((err) => {
-        setError(err.message ?? "We could not load your requests.");
-      })
-      .finally(() => setLoading(false));
+        if (!cancelled) {
+          setResult({
+            employeeId,
+            balance: null,
+            requests: [],
+            error: err.message ?? "We could not load your requests.",
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [selectedEmployeeId]);
 
-  // The employee list itself is still loading. The selector already
-  // shows its own loading state, so this page has nothing useful to say yet.
-  if (selectedEmployeeId === null) {
-    return null;
+  // The list of people is still on its way.
+  if (employeesLoading) {
+    return (
+      <p className="text-center text-slate-400" role="status">
+        Loading...
+      </p>
+    );
   }
 
-  if (loading) {
+  // The list of people could not be loaded, for example the server is down.
+  if (employeesError) {
+    return <ErrorBox message={employeesError} />;
+  }
+
+  if (employees.length === 0 || selectedEmployeeId === null) {
+    return (
+      <p className="rounded-lg border border-navy-700 bg-navy-900/60 p-6 text-center text-slate-400">
+        There are no employees to show yet.
+      </p>
+    );
+  }
+
+  // Nothing loaded yet, or what is loaded belongs to someone else.
+  if (result === null || result.employeeId !== selectedEmployeeId) {
     return (
       <p className="text-center text-slate-400" role="status">
         Loading your requests...
@@ -52,16 +112,11 @@ export default function MyRequestsPage() {
     );
   }
 
-  if (error) {
-    return (
-      <p
-        className="rounded-lg border border-red-400/40 bg-red-500/10 p-4 text-center text-red-200"
-        role="alert"
-      >
-        {error}
-      </p>
-    );
+  if (result.error) {
+    return <ErrorBox message={result.error} />;
   }
+
+  const { balance, requests } = result;
 
   return (
     <div className="flex flex-col gap-8">
