@@ -113,7 +113,7 @@ npm run test:e2e
 
 ## Database
 
-The project uses PostgreSQL 16, run through `docker-compose.yml`.
+The project uses PostgreSQL 18, run through `docker-compose.yml`.
 
 ```bash
 docker compose up -d
