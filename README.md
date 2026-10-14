@@ -7,7 +7,7 @@ Week 1: data model. Week 2: the backend API on top of it.
 - `docs/er-diagram.png` — ER diagram (source: `docs/er-diagram.dot`, Graphviz)
 - `db/schema.sql` — table definitions, constraints, and the balance-enforcement trigger
 - `db/seed.sql` — 10 employees across 3 managers, 45 leave requests spread across all four statuses and all twelve months
-- `docker-compose.yml` — Postgres 16, auto-loads schema + seed on first start
+- `docker-compose.yml` — Postgres 18, auto-loads schema + seed on first start
 - `leave-api/` — the NestJS API (week 2)
 - `postman/collections/leave-management-api/` — a full request collection covering all 8 endpoints, kept locally via Postman's "Work locally with Git" feature
 
