@@ -12,7 +12,7 @@
 
 - Schema with `EMPLOYEE`, `LEAVE_BALANCE`, `LEAVE_REQUEST`.
 - Constraints doing as much of the enforcement as Postgres can do on its own: `CHECK` on status values, `CHECK` on date ordering, `CHECK` on start date not being in the past, a `GIST EXCLUDE` constraint stopping two approved requests for the same employee from overlapping, and a trigger stopping an approval from pushing someone over their yearly balance.
-- Seed data: 10 employees, 3 managers, 45 leave requests across all four statuses and every month of the year, loaded and verified against a real Postgres instance (not just eyeballed) — the overlap constraint and the balance trigger both actually ran against every row.
+- Seed data: 10 employees, 3 managers, 50 leave requests across all four statuses and every month of the year, loaded and verified against a real Postgres instance (not just eyeballed) — the overlap constraint and the balance trigger both actually ran against every row.
 - `docker-compose.yml` that brings the whole thing up with one command using Postgres's own init-script mechanism, rather than a custom entrypoint script.
 
 ### What confused me, and what I decided
@@ -150,10 +150,11 @@ Three screens (My requests, New request, Approvals) with loading, empty, error a
 
 ### Checked by hand
 
-- Approving or rejecting through the API (Postman) as the employee herself, as a manager of someone else, as the employee's real manager's report, and for an employee with no manager: all return 403 with the right message. Approving as the real manager still works from the Approvals screen.
+- Approving or rejecting through the API (Postman) as the employee herself, as a manager of someone else, as a manager acting on their own request, and for an employee with no manager: all return 403 with the right message. Approving as the real manager still works from the Approvals screen.
 - The balance on My requests matches the seed (for example 16 of 21 for Sara Youssef after her approved days).
 - The overlap refusal shows as a sentence with dates as `dd-MMM-yy`.
 - `npm run lint` and `npm run build` pass in both folders.
+- **A fresh clone.** I cloned the repository into a new folder and followed the README from the start: the database started and loaded the seed (50 leave requests, counted by status), the API started, and the frontend started and opened in the browser. Things this found that I then fixed: the README used `cp`, which does not exist in CMD; the README said PostgreSQL 16 while the compose file uses 18; this log said the seed has 45 leave requests while it has 50; and the README said the seed is loaded only on the first run, which is not exact because the compose file has no data volume. One thing differed from the README on my machine: a container called `leave-management-db` from my own working copy already existed, so in the clone only I changed the container name in the compose file for the test, which means I did not run the README's `docker exec` command with its exact container name there.
 
 ### Known gaps
 
@@ -162,6 +163,7 @@ Three screens (My requests, New request, Approvals) with loading, empty, error a
 - Nourhan's requests cannot be reviewed by anyone until the client decides who reviews them.
 - Employees marked inactive still appear in the person menu.
 - `formatDateTime` is not used on any screen yet.
+- The database container has no volume for its data, so `docker compose down` removes the data too and the next start re-runs the seed.
 - No automated tests for the screens; everything was checked by hand against the running API.
 
 ### Questions I'm bringing to the call

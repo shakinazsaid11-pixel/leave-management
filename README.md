@@ -16,7 +16,7 @@ leave-management/
 - `leave-api/` — NestJS backend API
 - `leave-frontend/` — Next.js user interface
 - `db/` — PostgreSQL schema and seed data
-- `docs/` — ER diagram and documentation
+- `docs/` — ER diagram, documentation and screenshots
 - `docker-compose.yml` — PostgreSQL container setup
 
 ---
@@ -25,7 +25,7 @@ leave-management/
 
 - Node.js
 - npm
-- Docker Desktop
+- Docker Desktop (it must be running before you start the database)
 - PostgreSQL (provided through Docker)
 
 ---
@@ -43,7 +43,7 @@ docker compose up -d
 To reset the database and reload the schema and seed data:
 
 ```bash
-docker compose down -v
+docker compose down
 docker compose up -d
 ```
 
@@ -55,10 +55,16 @@ Go to the API directory:
 cd leave-api
 ```
 
-Copy `.env.example` to `.env` — the defaults already match `docker-compose.yml`:
+Copy `.env.example` to `.env`. The defaults already match `docker-compose.yml` (the database is on port 5433 of your machine):
 
 ```bash
 cp .env.example .env
+```
+
+On Windows (PowerShell or CMD) use:
+
+```powershell
+copy .env.example .env
 ```
 
 The `.env` file is local configuration and should not be committed to the repository.
@@ -110,10 +116,10 @@ Copy `.env.example` to `.env.local`. It holds the address of the API:
 cp .env.example .env.local
 ```
 
-On Windows PowerShell:
+On Windows (PowerShell or CMD) use:
 
 ```powershell
-Copy-Item .env.example .env.local
+copy .env.example .env.local
 ```
 
 The default (`http://localhost:3000`) matches the API's default port. `.env.local` is local configuration and should not be committed.
@@ -127,6 +133,11 @@ npm run dev -- -p 3001
 Then open `http://localhost:3001`. There is no login yet, so the menu at the top right switches between people while testing.
 
 More detail is in `leave-frontend/README.md`.
+
+### Troubleshooting
+
+- **"unable to get image" or "failed to connect to the docker API"**: Docker Desktop is not running. Start it, wait until it says the engine is running, and try again.
+- **"The container name /leave-management-db is already in use"**: another copy of this project already created a container with that name on your machine. Stop and rename the old one (`docker rename leave-management-db <new name>`) or remove it if you do not need its data. Do not remove it if it holds data you want to keep.
 
 ---
 
@@ -161,13 +172,20 @@ npm run lint
 
 ## Database
 
-The project uses PostgreSQL 16, run through `docker-compose.yml`.
+The project uses PostgreSQL 18, run through `docker-compose.yml`.
 
 ```bash
 docker compose up -d
 ```
 
-The database schema and seed data are loaded automatically on the **first** run only (Postgres runs anything in `/docker-entrypoint-initdb.d/` once, when the data volume is empty).
+The database is published on port 5433 of your machine (5432 inside the container), which is why `DB_PORT` in `leave-api/.env.example` is 5433.
+
+The schema and seed data are loaded automatically whenever the database container is created (Postgres runs everything in `/docker-entrypoint-initdb.d/` when its data folder is empty). The compose file has no volume for the data itself, so removing the container (`docker compose down`) also removes the data, and the next `docker compose up -d` starts again from the seed. To keep a container and its data between sessions, stop and start it instead:
+
+```bash
+docker stop leave-management-db
+docker start leave-management-db
+```
 
 To connect to PostgreSQL directly:
 
@@ -175,10 +193,12 @@ To connect to PostgreSQL directly:
 docker exec -it leave-management-db psql -U postgres -d postgres
 ```
 
+The seed contains 10 employees (3 of them managers) and 50 leave requests.
+
 To completely reset the database (re-run schema + seed):
 
 ```bash
-docker compose down -v
+docker compose down
 docker compose up -d
 ```
 
@@ -204,6 +224,46 @@ Important database design decisions:
 - Approved leave overlap is prevented at the database level (a `GIST EXCLUDE` constraint) **and** re-checked in the application layer for the same reason.
 - Balance enforcement is backed by a database trigger, with the same check duplicated in the service for a clean error message.
 - Cancelling an approved request keeps its review history — `reviewerId`/`reviewedAt` are never cleared, even when a manager later cancels an approved request.
+
+---
+
+## Week 2 — The API
+
+The backend is a NestJS application built on top of the week 1 schema. This section describes the API as it was built in week 2. Later weeks changed some of it, and each change is noted below.
+
+### Endpoints
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/employees` | List employees |
+| GET | `/employees/:id` | One employee, with the remaining balance for the year |
+| POST | `/leave-requests` | Submit a new request |
+| GET | `/leave-requests` | List requests, filterable by `employeeId`, `status`, `from`, `to` |
+| GET | `/leave-requests/:id` | One request |
+| PATCH | `/leave-requests/:id/approve` | Approve (body: `{ "reviewerId": number }`) |
+| PATCH | `/leave-requests/:id/reject` | Reject, with a reason (body: `{ "reviewerId": number, "reason": string }`) |
+| PATCH | `/leave-requests/:id/cancel` | Cancel |
+
+There is no login yet, so `approve` and `reject` take `reviewerId` in the body instead of working it out. The schema requires a reviewer on any reviewed row.
+
+The number of business days is always counted by the server from `startDate` and `endDate`, never taken from the client. A request is created as `PENDING`, and only `approve`, `reject` and `cancel` change its status.
+
+### Layers
+
+- **Controller** (`*.controller.ts`) receives the request, calls the service and returns the result. It holds no business rules.
+- **Service** (`*.service.ts`) holds all the business logic: business day counting on create, the remaining balance calculation, and the status rules (only a `PENDING` request can move to another status).
+- **Repository** is currently TypeORM's own `Repository<T>`, injected straight into each service with `@InjectRepository`. It is not a separate class, which is the first of the known gaps below.
+
+### What changed after week 2
+
+- **Response shape.** In week 2 successes came back as `{ "success": true, "data": ... }` (through a global interceptor) but errors still used NestJS's default shape. Week 3 made every error come back as `{ "success": false, "error": { "statusCode", "message" } }`.
+- **Past start dates.** In week 2 a past dated request reached the database and failed as a raw Postgres error. The database check was removed in the week 1 follow-up, and the rule now lives in `LeaveRequestsService` and returns a clear 400 (see Week 3).
+- **Cancelling** now takes `requesterId` in the body and checks who is cancelling (Week 3, rule 7).
+- **Added in week 4:** `GET /leave-requests/preview`, the `managerId` filter and `employeeName` on the list, and the balance fields on `GET /employees/:id`.
+
+### Known gaps from week 2 that are still open
+
+- **No separate Repository class.** Services inject `Repository<T>` directly instead of going through a dedicated layer that is the only code allowed to build queries. `LeaveRequestsService` builds its own queries (the filters in `findAll`, and the overlap and balance checks), which is query building that arguably belongs one layer down.
 
 ---
 
@@ -313,7 +373,8 @@ Input is checked before the service or the database is asked, using `ValidationP
 
 ### Screen rules
 
-- Dates are shown as `dd-MMM-yy` (for example `24-Sep-26`). Date only values are read straight from the `YYYY-MM-DD` string, never through a `Date` object, so the day can not shift with the timezone. Timestamps are shown in the `Africa/Cairo` timezone, which follows Egypt's clock changes, and never as a fixed number of hours.
+- Dates are shown as `dd-MMM-yy` (for example `24-Sep-26`). Date only values are read straight from the `YYYY-MM-DD` string, never through a `Date` object, so the day can not shift with the timezone.
+- No screen shows a time of day yet. The `formatDateTime` helper in `lib/format.ts` is ready for it and uses the `Africa/Cairo` timezone, which follows Egypt's clock changes, not a fixed number of hours.
 - No developer wording reaches the screen. A failure on the server side always shows "Something went wrong on our side. Please try again in a moment." and an unreachable API shows "We couldn't reach the server."
 - When the person is switched while an answer is still on its way, the old answer is ignored, so the screen never shows one person's data under another person's name.
 
@@ -325,12 +386,13 @@ Input is checked before the service or the database is asked, using `ValidationP
 
 - `docs/er-diagram.png` — ER diagram
 - `docs/er-diagram.dot` — Graphviz source
+- `docs/screenshots/` — screenshots of each screen state
 
 ### Database
 
 - `db/schema.sql` — table definitions, constraints, and database trigger
 - `db/seed.sql` — sample employees and leave requests
-- `docker-compose.yml` — PostgreSQL 16 setup
+- `docker-compose.yml` — PostgreSQL 18 setup
 
 ### API
 
@@ -372,3 +434,4 @@ The frontend talks to the API only through `leave-frontend/lib/api.ts`.
 - Nourhan has no manager, so her requests can not be approved or rejected by anyone yet. This needs a decision from the client (see `LOG.md`).
 - Who is calling is still sent in the request body (`reviewerId`, `requesterId`), so anyone who calls the API directly can claim to be a manager. Real authentication in week 5 replaces this.
 - Employees who are no longer active still appear in the person menu.
+- The database container has no volume for its data, so `docker compose down` removes the data too and the next start re-runs the seed.
