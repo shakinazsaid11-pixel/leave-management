@@ -84,8 +84,16 @@ export class LeaveRequestsService {
     // Compare against the start of today, not the current moment — a
     // request starting today should be allowed, not refused just because
     // midnight UTC today is "earlier" than right now.
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
+    //
+    // "Today" is the date in Cairo (Africa/Cairo), not the date in UTC.
+    // Between 12 AM and 2/3 AM Cairo time it is still yesterday in UTC,
+    // so the UTC version accepted requests that started yesterday.
+    // The en-CA format gives "YYYY-MM-DD", and new Date() on that string
+    // gives midnight UTC, the same shape as start, so we compare date to date.
+    const todayInCairo = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Africa/Cairo',
+    }).format(new Date());
+    const today = new Date(todayInCairo);
     if (start < today) {
       throw new BadRequestException('The start date cannot be in the past.');
     }
